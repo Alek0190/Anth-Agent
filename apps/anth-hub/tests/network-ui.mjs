@@ -600,6 +600,24 @@ try {
   await page.screenshot({ path: "/tmp/anth-net-projects.png" });
   pass("a second device joins the same project in staging");
 
+  // The agent team: on for project sessions; the Lead delegates and the member shows in the tree under it.
+  await tab("Team");
+  await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.locator(".team-role")).toHaveCount(8);
+  await page.getByLabel("Tester model").selectOption("echo");
+  await expect(page.getByLabel("Tester model")).toHaveValue("echo");
+  await send("delegate: backend | !echo from-the-team");
+  await expect(
+    chat().locator(".markdown").filter({ hasText: "Backend developer reports" }),
+  ).toBeVisible({ timeout: 20000 });
+  await expect(
+    page.locator(".tree-row.agent").filter({ hasText: "Backend developer" }),
+  ).toBeVisible();
+  await page.screenshot({ path: "/tmp/anth-net-team.png" });
+  await page.getByRole("switch", { name: "Lead a team" }).click();
+  await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute("aria-checked", "false");
+  pass("agent team: Team tab, model per role, a delegation shows the member in the tree");
+
   expect(errors).toEqual([]);
   pass("no browser runtime errors");
   console.log("ALL NETWORK UI CHECKS PASSED");

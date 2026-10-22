@@ -27,8 +27,9 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 | `GET /v1/fs/dirs` | `?path=` (empty = start dirs) | `{path, parent, dirs[]}`, one level, directories only |
 | `GET /v1/docs/app.shared-state` | | `{kind, value, revision}` |
 | `GET /v1/sessions` | | `SessionSummary[]` |
-| `POST /v1/sessions` | `{name, cwd, model:{provider,modelId}, thinkingLevel?, project?, env?}` | `201 SessionSummary`. `project` is `<client>/<project>` and must exist on this device (`404` otherwise); `env` is `dev`, `staging` or `prod` and defaults to `dev`; `env` without `project` is `400` |
+| `POST /v1/sessions` | `{name, cwd, model:{provider,modelId}, thinkingLevel?, project?, env?, team?}` | `201 SessionSummary`. `team` gives the root agent a team to lead (default: on for sessions in a project). `project` is `<client>/<project>` and must exist on this device (`404` otherwise); `env` is `dev`, `staging` or `prod` and defaults to `dev`; `env` without `project` is `400` |
 | `GET / PATCH / DELETE /v1/sessions/:s` | PATCH `{name?, project?, env?}` (`project: null` moves it out of its project) | summary (with its `compaction` thresholds); DELETE aborts all work, moves the files to `archive/` and returns `{archived}` |
+| `GET / PATCH /v1/sessions/:s/team` | PATCH `{enabled?, models?: {<role>: modelId \| null}}` | `TeamInfo` `{enabled, roles[]}`: the Lead (the root agent, with the `delegate` tool) and its members `api`, `backend`, `frontend`, `tester`, `reviewer`, `security`, `ops`, each with its tools, default model and current model. A member's model applies from its next delegation; `null` restores the default; `lead` changes the root agent's model |
 | `GET / PATCH /v1/sessions/:s/compaction` | PATCH `{enabled?, reserveTokens?, backgroundTokens?, keepRecentTokens?}` | the session's automatic compaction thresholds, read by pi-durable at its next request. Values are margins: the blocking summary starts at the model's context window minus `reserveTokens`, and the background one `backgroundTokens` earlier (0 turns it off). Default: a background summary at 200k tokens and a blocking one at 250k, or pi-durable's margins on smaller windows. Switching an agent to a window the thresholds do not fit refits them |
 | `GET /v1/sessions/:s/events` | | session stream |
 | `GET /v1/sessions/:s/tasks` | `?status=live\|terminal&limit=` | task nodes / recent outcomes |
@@ -55,7 +56,9 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 
 ## Agent tools
 
-Every agent gets the coding tools `read`, `write`, `edit` and `bash`, plus the playground tools `read_state`, `update_state`, `list_durable_jobs`, `run_durable_job`, `check_durable_job`, `search_history`, `ping_on_call_engineer`, `subagent`, `start_session` and `handoff`. `readOnly` removes the eight that write: `bash`, `write`, `edit`, `update_state`, `run_durable_job`, `ping_on_call_engineer`, `subagent` and `start_session`. `GET .../agents/:a` lists each tool with its replay policy and whether it is offered.
+Every agent gets the coding tools `read`, `write`, `edit` and `bash`, plus the playground tools `read_state`, `update_state`, `list_durable_jobs`, `run_durable_job`, `check_durable_job`, `search_history`, `ping_on_call_engineer`, `subagent`, `start_session` and `handoff`. A team Lead also gets `delegate`. `readOnly` removes the nine that write: `bash`, `write`, `edit`, `update_state`, `run_durable_job`, `ping_on_call_engineer`, `subagent`, `start_session` and `delegate`. `GET .../agents/:a` lists each tool with its replay policy and whether it is offered.
+
+`delegate({role, task})` runs one team member as a child conversation owned by the tool call: the role's model (`PATCH .../team`), only the role's tools (reviewer and security get `read` and `bash`; the others also `write` and `edit`), and the role's prompt from `src/team.ts`. It returns the member's final report. Members appear in the tree as subagents named after their role. A restart finds the same member and resumes it; a member's cut-off `bash` call comes back as interrupted.
 
 ## Durable jobs
 

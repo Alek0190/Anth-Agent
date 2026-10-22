@@ -130,7 +130,7 @@ UI: Clients → Projects → Environments tree; approval inbox on top; project h
 
 1. **Fork and run.** Fork as Anth-Agent, rename, run in WSL2 plus one cloud VM. *Done when:* `just check` passes and the UI shows both devices. **(rename done in this commit)**
 2. **Client → Project → Environment.** Catalog tables, API routes, left tree. *Done when:* a client and project exist and sessions show under them. **(done: `PUT /v1/projects/:client/:project`, sessions carry `project` + `env`, the hub tree merges Clients → Projects → Environments across devices)**
-3. **Agent team.** Port mydev's roles as extensions. *Done when:* the Lead plans a small app and the team builds it in a sandbox.
+3. **Agent team.** Port mydev's roles as extensions. *Done when:* the Lead plans a small app and the team builds it in a sandbox. **(done: `src/team.ts` roles, the Lead's durable `delegate` tool, model per role via `PATCH /v1/sessions/:s/team` and the Team tab; on by default in project sessions. Sandboxes arrive in phase 6, so members work in the session folder.)**
 4. **Ship job.** plan → build → test → review → approve → deploy (Vercel) → verify. *Done when:* the Anthward website ships through one approval.
 5. **Watch and fix.** Sentry/Vercel logs → Jev → thresholds → incident agent → fix → approval. *Done when:* an injected bug is fixed and waiting in under 5 minutes.
 6. **Sandbox device kind.** Modal, E2B or Daytona per task. *Done when:* risky work runs there by default.

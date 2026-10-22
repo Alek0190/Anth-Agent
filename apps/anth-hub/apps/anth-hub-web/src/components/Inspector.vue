@@ -12,12 +12,14 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Puzzle,
+  Users,
 } from "lucide-vue-next";
 import { THINKING_LEVELS, type ThinkingLevel } from "@sdk/api";
 import type { StateChange } from "@sdk/app-state";
 import StateEditor from "./StateEditor.vue";
 import TasksPanel from "./TasksPanel.vue";
 import ExtensionsPanel from "./ExtensionsPanel.vue";
+import TeamPanel from "./TeamPanel.vue";
 import ContextBar from "./ContextBar.vue";
 import { message } from "../client/hub";
 import { toolSignature } from "../client/signature";
@@ -56,6 +58,7 @@ const tabs = [
   { id: "session", label: "Session", icon: FolderOpen },
   { id: "state", label: "State", icon: Braces },
   { id: "tasks", label: "Tasks", icon: Activity },
+  { id: "team", label: "Team", icon: Users },
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "extensions", label: "Extend", icon: Puzzle },
 ];
@@ -355,12 +358,15 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
         </template>
         <TasksPanel v-if="ui.tab === 'tasks'" />
         <ExtensionsPanel v-if="ui.tab === 'extensions'" />
+        <TeamPanel v-if="ui.tab === 'team'" />
         <template v-if="ui.tab === 'tools'"
           ><div class="panel-heading">
             <h2>Tools</h2>
             <span class="tag">{{ offeredTools }} / {{ detail?.tools.length ?? 0 }}</span>
           </div>
-          <p class="hint">Every tool this agent's extensions provide. Open one to see its definition.</p>
+          <p class="hint">
+            Every tool this agent's extensions provide. Open one to see its definition.
+          </p>
           <div class="hook-card">
             <div>
               <ShieldCheck :size="18" /><strong>Read only</strong
@@ -373,7 +379,9 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
                 @click="
                   configure(
                     { readOnly: !readOnly },
-                    readOnly ? 'Read only off. Every tool is back.' : 'Read only on. Tools that write are disabled.',
+                    readOnly
+                      ? 'Read only off. Every tool is back.'
+                      : 'Read only on. Tools that write are disabled.',
                   )
                 "
               >
@@ -381,8 +389,8 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
               </button>
             </div>
             <p>
-              Offers this agent only tools that read. Tools that create, update or delete leave its next request, and
-              the choice is stored with the agent.
+              Offers this agent only tools that read. Tools that create, update or delete leave its
+              next request, and the choice is stored with the agent.
             </p>
           </div>
           <details
@@ -394,7 +402,9 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
             <summary>
               <Wrench :size="18" /><strong>{{ tool.name }}</strong
               ><span v-if="!tool.offered" class="tag tool-disabled">disabled</span
-              ><span class="tag">{{ tool.replay === "safe" ? "replay safe" : "interrupt on crash" }}</span>
+              ><span class="tag">{{
+                tool.replay === "safe" ? "replay safe" : "interrupt on crash"
+              }}</span>
             </summary>
             <p>{{ tool.description }}</p>
             <pre

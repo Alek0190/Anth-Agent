@@ -134,6 +134,40 @@ export const slugify = (name: string) =>
 /** A project's network-wide id, `<client>/<project>`. */
 export const projectRef = (p: Pick<ProjectSummary, "client" | "slug">) => `${p.client}/${p.slug}`;
 
+// ---------------------------------------------------------------- the agent team
+
+/** The Lead (the session's root agent) and the members it can delegate to. */
+export const TEAM_ROLES = ["lead", "api", "backend", "frontend", "tester", "reviewer", "security", "ops"] as const;
+export type TeamRoleId = (typeof TEAM_ROLES)[number];
+
+export interface TeamRoleInfo {
+  id: TeamRoleId;
+  title: string;
+  summary: string;
+  /** The coding tools the role is offered (the Lead also has its session's tools and `delegate`). */
+  tools: string[];
+  /** False for roles that only read: reviewer and security. */
+  writes: boolean;
+  defaultModel: string;
+  /** The model the role runs on now: the Lead's is the root agent's model, members use an override or their default. */
+  model: string;
+  /** True when this session overrides the member's default model. */
+  custom: boolean;
+}
+
+/** GET /v1/sessions/:s/team. */
+export interface TeamInfo {
+  /** True when the session's root agent leads a team (has the `delegate` tool). */
+  enabled: boolean;
+  roles: TeamRoleInfo[];
+}
+
+/** PATCH /v1/sessions/:s/team. A model of `null` restores the role's default; `lead` changes the root agent's model. */
+export interface UpdateTeamBody {
+  enabled?: boolean;
+  models?: Partial<Record<TeamRoleId, string | null>>;
+}
+
 // ---------------------------------------------------------------- sessions and agents
 
 export type AgentKind = "root" | "fork" | "subagent";
@@ -174,6 +208,8 @@ export interface SessionSummary {
   project?: string;
   /** Set whenever `project` is. */
   env?: EnvironmentName;
+  /** True when the root agent leads an agent team. */
+  team?: boolean;
 }
 
 /**
@@ -277,6 +313,8 @@ export interface CreateSessionBody {
   project?: string;
   /** Defaults to `dev` when `project` is set; only valid with `project`. */
   env?: EnvironmentName;
+  /** Give the root agent a team to lead. Defaults to true for sessions in a project, false otherwise. */
+  team?: boolean;
 }
 
 export interface CreateAgentBody {

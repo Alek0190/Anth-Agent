@@ -103,3 +103,24 @@
 .tool-row summary .tag.tool-disabled + .tag {
   margin-left: auto;
 }
+
+/* The Team tab: the same cards, one per role, each with a model choice. */
+.team-role.off {
+  opacity: 0.6;
+}
+.team-role .ext-head code {
+  font-size: 13px;
+  border: 1px solid #443738;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.team-model {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.team-model select {
+  width: 100%;
+}
