@@ -45,7 +45,16 @@ export async function freePort() {
 export const newToken = () => `anth_${randomBytes(32).toString("base64url")}`;
 
 /** Boot the real backend as a child process (faux provider, temp ANTH_HOME). */
-export async function bootServer(opts: { home: string; startDirs: string; token: string; port?: number; name?: string; cwd?: string }) {
+export async function bootServer(opts: {
+  home: string;
+  startDirs: string;
+  token: string;
+  port?: number;
+  name?: string;
+  cwd?: string;
+  /** Extra environment for the backend process, e.g. deploy tokens and fake tool paths. */
+  env?: Record<string, string>;
+}) {
   const port = opts.port ?? (await freePort());
   const base = `http://127.0.0.1:${port}`;
   let child: ChildProcess | undefined;
@@ -60,6 +69,7 @@ export async function bootServer(opts: { home: string; startDirs: string; token:
         ANTH_PROVIDER: "faux",
         ANTH_START_DIRS: opts.startDirs,
         ANTH_DEVICE_NAME: opts.name ?? "test-device",
+        ...opts.env,
       },
       stdio: ["ignore", "pipe", "pipe"],
       cwd: opts.cwd ?? resolve(import.meta.dirname, ".."),

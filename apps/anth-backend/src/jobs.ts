@@ -6,6 +6,7 @@
 // `demo.job-runs`, then commits the next checkpoint. A restart resumes the unfinished phase from its checkpoint.
 import type { Context, JsonValue } from "@earendil-works/chord";
 import {
+  type AgentChange,
   configure,
   defineDoc,
   defineTask,
@@ -30,6 +31,10 @@ import {
   type JobStepKind,
 } from "../../anth-sdk/src/jobs.js";
 import type { SharedState } from "./shared-state.js";
+import { SHIP_DEFS, SHIP_HANDLERS } from "./ship.js";
+import type { TeamRoleId } from "../../anth-sdk/src/api.js";
+import { spawn } from "node:child_process";
+import { resolve as resolvePath } from "node:path";
 
 export const JobRuns = defineDoc<JobRunsDoc>({
   kind: JOB_RUNS_DOC,
@@ -40,8 +45,8 @@ export const JobRuns = defineDoc<JobRunsDoc>({
   initial: () => ({ counts: {}, items: {} }),
 });
 
-type Values = Record<string, JobInputValue>;
-type Data = Record<string, JsonValue>;
+export type Values = Record<string, JobInputValue>;
+export type Data = Record<string, JsonValue>;
 type JobInput = { job: string; input: Values };
 type Checkpoint = { phase: string; iteration: number; data: Data; approvalTask?: number };
 type JobResult = { summary: string };
@@ -119,6 +124,8 @@ export const JOB_DEFS: JobDef[] = [
   },
 ];
 
+JOB_DEFS.push(...SHIP_DEFS);
+
 export const jobDef = (id: string) => JOB_DEFS.find((d) => d.id === id);
 
 /** Validate a job's input against its spec, filling defaults. Throws a message the caller can show as is. */
@@ -147,16 +154,26 @@ export function resolveJobInput(def: JobDef, raw: unknown): Values {
 
 // ------------------------------------------------------------------ the phase API job handlers use
 
-interface Phase {
+export interface Phase {
   readonly input: Values;
+  /** The session's working directory on this device. */
+  readonly cwd: string;
   readonly data: Data;
   readonly iteration: number;
   readonly run: { id: number; n: number };
   now(): number;
   /** Run a shell command in the session's folder and record it as a step. Throws on a non-zero exit. */
-  exec(command: string, label?: string): Promise<string>;
+  exec(command: string, label?: string, timeoutSec?: number): Promise<string>;
   /** Run a shell command without recording it. */
-  shell(command: string): Promise<{ code: number; out: string }>;
+  shell(command: string, timeoutSec?: number): Promise<{ code: number; out: string }>;
+  /**
+   * Run a command that acts on the outside world (deploy, push) in the backend process, not the agent's shell, with
+   * the named secrets from the device's environment. Agents never see these values; they are redacted from the output.
+   * Records a step and throws on a non-zero exit.
+   */
+  effect(command: string, opts: { label: string; dir?: string; secrets?: Record<string, string>; timeoutSec?: number }): Promise<string>;
+  /** Run a team member (reviewer, security, …) on a prompt in an owned child conversation; returns its report. */
+  member(role: TeamRoleId, prompt: string): Promise<string>;
   step<T>(kind: JobStepKind, label: string, fn: () => Promise<{ value: T; detail?: string }>): Promise<T>;
   note(label: string, detail?: string): Promise<void>;
   progress(done: number, total: number): Promise<void>;
@@ -167,8 +184,8 @@ interface Phase {
   sleepUntil(at: number): Promise<void>;
 }
 
-type Outcome = { done: string; data?: Data } | { again: Data; summary?: string };
-type Handler = (p: Phase) => Promise<Outcome>;
+export type Outcome = { done: string; data?: Data } | { again: Data; summary?: string };
+export type Handler = (p: Phase) => Promise<Outcome>;
 
 const inDir = (dir: string, command: string) => (dir === "." ? command : `cd ${q(dir)} && ${command}`);
 const label = (dir: string, command: string) => (dir === "." ? command : `${command}  (in ${dir})`);
@@ -367,6 +384,10 @@ function endRun(run: JobRun, index: number, status: "failed" | "aborted", runSta
 export interface JobsDeps {
   shared: SharedState;
   sessionId: string;
+  /** The session's working directory. */
+  cwd: () => string;
+  /** How a team member's child conversation is configured, and how it is named in the tree. */
+  team?: { change: (role: TeamRoleId) => AgentChange; title: (role: TeamRoleId) => string; name: (id: number, title: string) => void };
 }
 
 const CHILD_INSTRUCTIONS =
@@ -410,11 +431,11 @@ export function createJobs(deps: JobsDeps) {
         current.updatedAt = runtime.now();
         return undefined;
       }, ctx);
-    const shell = async (command: string) => {
+    const shell = async (command: string, timeoutSec = 60) => {
       const env = await runtime.env(ctx);
       if (!env) throw Error("This session has no execution environment");
       let out = "";
-      const result = await env.exec(command, { timeout: 60, onOutput: (text) => void (out.length < 50_000 && (out += text)) }, ctx);
+      const result = await env.exec(command, { timeout: timeoutSec, onOutput: (text) => void (out.length < 50_000 && (out += text)) }, ctx);
       if (!result.ok) throw Error(`${command}: ${result.error.message}`);
       return { code: result.value.exitCode, out };
     };
@@ -437,17 +458,125 @@ export function createJobs(deps: JobsDeps) {
       }
     };
     const stateKey = (path: string) => `job:${deps.sessionId}:${task.id}:${spec.id}:${cp.iteration}:${path}`;
+    /** Find or create the owned child conversation for one step, run the prompt in it and mirror its tool calls. */
+    const child = async (opts: {
+      stepId: string;
+      label: string;
+      find: (tx: Tx) => Promise<number | undefined>;
+      create: (tx: Tx) => Promise<number>;
+      prompt: string;
+      requestId: string;
+      named?: string;
+    }) => {
+      let childId = 0;
+      const { stepId } = opts;
+      const at = runtime.now();
+      await runtime.commit(async (tx) => {
+        childId = (await opts.find(tx)) ?? (await opts.create(tx));
+        const current = await runOf(tx, task);
+        current.childConversationId = childId;
+        upsertStep(current.phases[index], {
+          id: stepId,
+          kind: "agent",
+          label: opts.label,
+          detail: "Working",
+          status: "running",
+          iteration: cp.iteration,
+          at,
+          conversationId: childId,
+        });
+        return undefined;
+      }, ctx);
+      if (opts.named) deps.team?.name(childId, opts.named);
+      const handle = await runtime.conversation(childId as ConversationId, ctx);
+      if (!handle) throw Error(`${opts.label} (#${childId}) is missing`);
+      const submission = await handle.submit({ type: "input", content: opts.prompt, requestId: opts.requestId }, ctx);
+      const settled = submission.wait(ctx);
+      // Mirror the child's tool calls into the run record while it works; each call is its own pi.tool task.
+      let seen = "";
+      const sync = async () => {
+        const view = await runtime.context(childId as ConversationId, ctx);
+        const results = new Map<string, boolean>();
+        const calls: { id: string; name: string; args: unknown }[] = [];
+        for (const entry of view.entries) {
+          for (const m of (entry.model ?? []) as unknown as WireMessage[]) {
+            if (m.role === "toolResult") {
+              const r = m as WireToolResultMessage;
+              results.set(r.toolCallId, r.isError);
+            }
+            if (m.role === "assistant")
+              for (const b of (m as WireAssistantMessage).content)
+                if (b.type === "toolCall") calls.push({ id: b.id, name: b.name, args: b.arguments });
+          }
+        }
+        const key = JSON.stringify(calls.map((c) => [c.id, results.get(c.id)]));
+        if (key === seen) return view;
+        seen = key;
+        await record((_r, phase) => {
+          for (const c of calls) {
+            const id = `${stepId}:tool:${c.id}`;
+            const prior = phase.steps.find((s) => s.id === id);
+            const status = !results.has(c.id) ? "running" : results.get(c.id) ? "error" : "done";
+            const started = prior?.at ?? runtime.now();
+            upsertStep(phase, {
+              id,
+              kind: "tool",
+              label: c.name,
+              detail: clip(summarizeArgs(c.args), 160),
+              status,
+              iteration: cp.iteration,
+              at: started,
+              conversationId: childId,
+              // Only a call seen running has a measured duration; one that finished between polls has none.
+              ...(status !== "running" && prior ? { ms: prior.ms ?? runtime.now() - started } : {}),
+            });
+          }
+        });
+        return view;
+      };
+      let done: Awaited<typeof settled> | undefined;
+      while (!done) {
+        runtime.signal.throwIfAborted();
+        done = await Promise.race([
+          settled,
+          runtime.sleep(runtime.now() + 600, ctx).then(
+            () => undefined,
+            () => undefined,
+          ),
+        ]);
+        await sync();
+      }
+      const view = await sync();
+      const answer = done.status === "done" && done.type === "input" ? view.entries.find((e) => e.id === done.answer) : undefined;
+      const text = answer ? ((answer.model ?? []) as unknown as WireMessage[]).map(messageText).join("").trim() : "";
+      await record((_r, phase) =>
+        upsertStep(phase, {
+          id: stepId,
+          kind: "agent",
+          label: opts.label,
+          detail: clip(text || `Ended: ${done.status}`, 600),
+          status: text ? "done" : "error",
+          iteration: cp.iteration,
+          at,
+          ms: runtime.now() - at,
+          conversationId: childId,
+        }),
+      );
+      if (!text) throw Error(`${opts.label} returned no answer (${done.status})`);
+      return text;
+    };
     return {
       input: task.input.input,
+      cwd: deps.cwd(),
       data: cp.data,
       iteration: cp.iteration,
       run: { id: task.id as number, n: run.run },
       now: () => runtime.now(),
       shell,
       step,
-      exec: (command, text) =>
+      exec: (command, text, timeoutSec) =>
         step("command", text ?? command, async () => {
-          const r = await shell(command);
+          const r = await shell(command, timeoutSec);
           if (r.code !== 0) throw Error(`Exit ${r.code}: ${tail(r.out, 4)}`);
           return { value: r.out, detail: tail(r.out) || "(no output)" };
         }),
@@ -476,115 +605,50 @@ export function createJobs(deps: JobsDeps) {
         }
       },
       sleepUntil: (at) => runtime.sleep(at, ctx),
-      agent: async (prompt) => {
-        let childId = 0;
-        const stepId = `${spec.id}:${cp.iteration}:agent`;
-        const at = runtime.now();
-        await runtime.commit(async (tx) => {
-          const found = (await tx.scanConversations({ ownerTaskId: task.id }, 1)).items[0];
-          if (found) childId = found.id as number;
-          else {
-            const child = await tx.createConversation({ ownership: { kind: "task", taskId: task.id } });
-            await configure(tx, child.id, {
+      agent: (prompt) =>
+        child({
+          stepId: `${spec.id}:${cp.iteration}:agent`,
+          label: "Subagent",
+          // One plain subagent per run, recorded on its step in the commit that creates it, so a replay finds it.
+          find: async (tx) =>
+            (await runOf(tx, task)).phases.flatMap((ph) => ph.steps).find((st) => st.id.endsWith(":agent"))?.conversationId,
+          create: async (tx) => {
+            const c = await tx.createConversation({ ownership: { kind: "task", taskId: task.id } });
+            await configure(tx, c.id, {
               extensions: [CodingTools],
               tools: [createReadTool(), createBashTool()],
               instructions: CHILD_INSTRUCTIONS,
             });
-            childId = child.id as number;
-          }
-          const current = await runOf(tx, task);
-          current.childConversationId = childId;
-          upsertStep(current.phases[index], {
-            id: stepId,
-            kind: "agent",
-            label: `Subagent #${childId}`,
-            detail: "Working with read and bash",
-            status: "running",
-            iteration: cp.iteration,
-            at,
-            conversationId: childId,
-          });
-          return undefined;
-        }, ctx);
-        const handle = await runtime.conversation(childId as ConversationId, ctx);
-        if (!handle) throw Error(`Subagent #${childId} is missing`);
-        const submission = await handle.submit(
-          { type: "input", content: prompt, requestId: `job:${task.id}:${spec.id}` },
-          ctx,
-        );
-        const settled = submission.wait(ctx);
-        // Mirror the subagent's tool calls into the run record while it works; each call is its own pi.tool task.
-        let seen = "";
-        const sync = async () => {
-          const view = await runtime.context(childId as ConversationId, ctx);
-          const results = new Map<string, boolean>();
-          const calls: { id: string; name: string; args: unknown }[] = [];
-          for (const entry of view.entries) {
-            for (const m of (entry.model ?? []) as unknown as WireMessage[]) {
-              if (m.role === "toolResult") {
-                const r = m as WireToolResultMessage;
-                results.set(r.toolCallId, r.isError);
-              }
-              if (m.role === "assistant")
-                for (const b of (m as WireAssistantMessage).content)
-                  if (b.type === "toolCall") calls.push({ id: b.id, name: b.name, args: b.arguments });
-            }
-          }
-          const key = JSON.stringify(calls.map((c) => [c.id, results.get(c.id)]));
-          if (key === seen) return view;
-          seen = key;
-          await record((_r, phase) => {
-            for (const c of calls) {
-              const id = `${spec.id}:${cp.iteration}:tool:${c.id}`;
-              const prior = phase.steps.find((s) => s.id === id);
-              const status = !results.has(c.id) ? "running" : results.get(c.id) ? "error" : "done";
-              const started = prior?.at ?? runtime.now();
-              upsertStep(phase, {
-                id,
-                kind: "tool",
-                label: c.name,
-                detail: clip(summarizeArgs(c.args), 160),
-                status,
-                iteration: cp.iteration,
-                at: started,
-                conversationId: childId,
-                // Only a call seen running has a measured duration; one that finished between polls has none.
-                ...(status !== "running" && prior ? { ms: prior.ms ?? runtime.now() - started } : {}),
-              });
-            }
-          });
-          return view;
-        };
-        let done: Awaited<typeof settled> | undefined;
-        while (!done) {
-          runtime.signal.throwIfAborted();
-          done = await Promise.race([
-            settled,
-            runtime.sleep(runtime.now() + 600, ctx).then(
-              () => undefined,
-              () => undefined,
-            ),
-          ]);
-          await sync();
-        }
-        const view = await sync();
-        const answer = done.status === "done" && done.type === "input" ? view.entries.find((e) => e.id === done.answer) : undefined;
-        const text = answer ? ((answer.model ?? []) as unknown as WireMessage[]).map(messageText).join("").trim() : "";
-        await record((_r, phase) =>
-          upsertStep(phase, {
-            id: stepId,
-            kind: "agent",
-            label: `Subagent #${childId}`,
-            detail: clip(text || `Ended: ${done.status}`, 600),
-            status: text ? "done" : "error",
-            iteration: cp.iteration,
-            at,
-            ms: runtime.now() - at,
-            conversationId: childId,
-          }),
-        );
-        if (!text) throw Error(`Subagent #${childId} returned no answer (${done.status})`);
-        return text;
+            return c.id as number;
+          },
+          prompt,
+          requestId: `job:${task.id}:${spec.id}`,
+        }),
+      effect: (command, opts) =>
+        step("command", opts.label, async () => {
+          const dir = resolvePath(deps.cwd(), opts.dir ?? ".");
+          const r = await runEffect(command, dir, opts.secrets ?? {}, opts.timeoutSec ?? 300, runtime.signal);
+          if (r.code !== 0) throw Error(`Exit ${r.code}: ${tail(r.out, 6)}`);
+          return { value: r.out, detail: tail(r.out) || "(no output)" };
+        }),
+      member: (role, prompt) => {
+        const team = deps.team;
+        if (!team) throw Error("This device has no agent team");
+        const stepId = `${spec.id}:${cp.iteration}:member:${role}`;
+        return child({
+          stepId,
+          label: team.title(role),
+          named: team.title(role),
+          // Each member's child is recorded on its step in the same commit that creates it, so a replay finds it.
+          find: async (tx) => (await runOf(tx, task)).phases[index].steps.find((st) => st.id === stepId)?.conversationId,
+          create: async (tx) => {
+            const c = await tx.createConversation({ ownership: { kind: "task", taskId: task.id } });
+            await configure(tx, c.id, { ...team.change(role), cwd: deps.cwd() });
+            return c.id as number;
+          },
+          prompt,
+          requestId: `job:${task.id}:${spec.id}:${role}`,
+        });
       },
     };
   };
@@ -695,7 +759,7 @@ export function createJobs(deps: JobsDeps) {
 
     let outcome: Outcome;
     try {
-      const handler = HANDLERS[def.id]?.[spec.id];
+      const handler = (HANDLERS[def.id] ?? SHIP_HANDLERS[def.id])?.[spec.id];
       if (!handler) throw Error(`No handler for ${def.id}/${spec.id}`);
       outcome = await handler(p);
     } catch (e) {
@@ -780,6 +844,35 @@ export function createJobs(deps: JobsDeps) {
 }
 
 export type Jobs = ReturnType<typeof createJobs>;
+
+/**
+ * Run an outside-world command in the backend process: bash in `dir`, a minimal environment plus `secrets`. Secret
+ * values never reach an agent and are masked in the returned output.
+ */
+export function runEffect(command: string, dir: string, secrets: Record<string, string>, timeoutSec: number, signal?: AbortSignal) {
+  const base = Object.fromEntries(
+    ["PATH", "HOME", "USER", "LANG", "TMPDIR", "SHELL"].flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : [])),
+  );
+  return new Promise<{ code: number; out: string }>((done, fail) => {
+    const child = spawn("bash", ["-c", command], {
+      cwd: dir,
+      env: { ...base, GIT_TERMINAL_PROMPT: "0", CI: "1", ...secrets },
+      stdio: ["ignore", "pipe", "pipe"],
+      signal,
+      timeout: timeoutSec * 1000,
+    });
+    let out = "";
+    const add = (chunk: Buffer) => void (out.length < 100_000 && (out += chunk.toString()));
+    child.stdout.on("data", add);
+    child.stderr.on("data", add);
+    child.on("error", fail);
+    child.on("close", (code) => {
+      let masked = out;
+      for (const value of Object.values(secrets)) if (value.length >= 6) masked = masked.split(value).join("***");
+      done({ code: code ?? 1, out: masked });
+    });
+  });
+}
 
 function summarizeArgs(args: unknown) {
   if (!args || typeof args !== "object") return String(args ?? "");

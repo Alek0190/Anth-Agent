@@ -4,7 +4,7 @@
 
 Anth-Agent is a fork of [disler/durable-pi](https://github.com/disler/durable-pi) (MIT), built on [pi-durable](https://earendil.com/posts/pi-durable/) from the team behind the [Pi coding agent](https://github.com/earendil-works/pi). Every device runs `anth-backend`, which owns its agents, their SQLite databases and their tools. Clients connect with a **URL and a bearer token**: the web hub, `anth-tui` in the terminal, or one `curl`. **The agent lives on the device, not in the client.** Close the browser, quit the terminal or restart the machine mid-tool, and the run picks up from its last checkpoint.
 
-**Plan:** [`docs/ANTH-AGENT-PLAN.md`](docs/ANTH-AGENT-PLAN.md) has the architecture and the seven-phase roadmap. Done so far: Phase 1 (fork and rename) Phase 2 (Clients → Projects → Environments: each device stores clients and projects, sessions carry a project and an environment, and the hub tree merges them across devices) and Phase 3 (the agent team: a Lead that delegates to API, backend, frontend, tester, reviewer, security and ops members, each a durable child conversation with its own model and tools).
+**Plan:** [`docs/ANTH-AGENT-PLAN.md`](docs/ANTH-AGENT-PLAN.md) has the architecture and the seven-phase roadmap. Done so far: Phase 1 (fork and rename) Phase 2 (Clients → Projects → Environments: each device stores clients and projects, sessions carry a project and an environment, and the hub tree merges them across devices) Phase 3 (the agent team: a Lead that delegates to API, backend, frontend, tester, reviewer, security and ops members, each a durable child conversation with its own model and tools) and Phase 4 (the `ship` job: branch, build and test, review, Vercel preview, pull request, your approval, then that exact preview promoted to production; plus `rollback`).
 
 | Upstream name | Anth-Agent name |
 |---|---|
@@ -341,6 +341,7 @@ just proactive take        # reset and run the proactive demo
 
 - **Durable means checkpointed, not exactly-once.** A `requestId` is admitted once, but an external effect (a payment, a page, a deploy) may have happened right before a crash. Replay-safe tools rerun and unsafe ones return an interrupted result. Effects still need their own idempotency.
 - **A token is a shell.** Anyone holding a device's token can run commands as that device's user. `start_dirs` only set where sessions begin. They are not a sandbox.
+- **Agents never see the backend's environment.** Upstream pi-durable passes the whole process environment to every agent command, so an agent's `echo $ANTH_TOKEN` printed the device token. Anth-Agent's `AgentExecutionEnv` gives agent commands only `PATH`, `HOME`, `USER`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`, `TERM` and `TZ`; deploy and GitHub tokens are read only by the ship job's own steps.
 - **LAN `ssh` devices speak plain HTTP**, so tokens cross the LAN in cleartext. exe.dev devices use HTTPS, and their proxy is public, so the token is the only gate.
 - **The hub holds every token.** It binds `127.0.0.1` and checks Host and Origin headers. Binding it to the LAN exposes every device it can reach.
 - **`anth-backend` binds `127.0.0.1` unless told otherwise.** For `ssh` and `exe-dev` devices, `just net up` writes `ANTH_HOST=0.0.0.0` (the default for the YAML's `host`) so clients can reach them, and the token guards everything under `/v1`.

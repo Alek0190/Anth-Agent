@@ -36,6 +36,7 @@ defaults:
   home_dir: ~/.anth                 # backend.env, data and logs; deploys never touch it
   start_dirs: ["~/anth-work"]       # where new sessions start (created if missing); any existing folder works as a cwd
   env_keys: [OPENROUTER_API_KEY]   # secrets: copied by name from .env, never written here
+  # env_keys: [OPENROUTER_API_KEY, VERCEL_TOKEN, GITHUB_TOKEN]   # a device that runs the ship job
   # env:                           # plain settings, written as-is
   #   ANTH_PROVIDER: faux           # the free deterministic model, for tests
 

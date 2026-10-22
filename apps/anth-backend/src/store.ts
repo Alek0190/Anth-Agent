@@ -64,7 +64,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { AgentExecutionEnv, agentShellEnv } from "./agent-env.js";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createPlayground, Workspace, type SpawnSession } from "./extensions.js";
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
@@ -628,17 +628,9 @@ export class Store {
     await mkdir(dirname(row.dbPath), { recursive: true });
     const unlock = lockFile(`${row.dbPath}.lock`);
     try {
-      const shellEnv = Object.fromEntries(
-        ["PATH", "HOME", "USER", "SHELL", "TMPDIR", "LANG", "TERM"].flatMap((k) =>
-          process.env[k] ? [[k, process.env[k]]] : [],
-        ),
-      );
+      const shellEnv = agentShellEnv();
       const registry = createRegistry();
       registry.install(CodingTools);
-      const jobs = createJobs({ shared: this.shared, sessionId: row.id });
-      const compaction = () => this.compactionOf(row.id);
-      const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
-      registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
       const addons = createAddons({ offline: this.options.provider === "faux" });
       for (const extension of addons.list) registry.install(extension);
@@ -659,12 +651,30 @@ export class Store {
         },
       });
       for (const extension of team.list) registry.install(extension);
+      const jobs = createJobs({
+        shared: this.shared,
+        sessionId: row.id,
+        cwd: () => row.cwd,
+        team: {
+          change: (role) => team.memberChange(role),
+          title: (role) => roleDef(role)?.title ?? role,
+          name: (conversationId, name) => {
+            try {
+              this.setAgentName(row, conversationId, name);
+            } catch {}
+          },
+        },
+      });
+      const compaction = () => this.compactionOf(row.id);
+      const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
+      registry.install(playground);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
         {
           models: this.models,
           registry,
-          env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? row.cwd, shellEnv }),
+          // Agents' commands see only an allowlisted environment: no device token, model key or deploy tokens.
+          env: ({ cwd }) => new AgentExecutionEnv({ cwd: cwd ?? row.cwd, shellEnv }),
           conversationCreated: async (tx, c) => {
             await tx.doc(Workspace, c.id);
             await tx.doc(JobRuns, c.id);

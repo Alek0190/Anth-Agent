@@ -63,7 +63,11 @@ How you work:
    auth, secrets, payments, user data or dependencies.
 6. Report to the owner: what was built, how it was checked, what is left, and anything that needs their approval.
 
-Never deploy, push, merge or contact anyone yourself; say what is ready and wait for the owner.`,
+Shipping: when the work is reviewed and the owner wants it live, start the durable job "ship" with run_durable_job
+(input path: the project folder, if it is not the working directory). It commits the work to a branch, builds and tests
+it, has the reviewer and security check it, deploys a Vercel preview and checks it, opens a pull request, then waits for
+the owner's approval before it promotes that exact preview to production. To undo a bad release, start "rollback".
+These jobs are the only way anything reaches production: never deploy, push, merge or contact anyone yourself.`,
   },
   {
     id: "api",
@@ -211,13 +215,7 @@ export function createTeam(host: TeamHost) {
         const found = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
         if (found) return found.id;
         const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-        await configure(tx, child.id, {
-          model,
-          thinkingLevel: parent.thinkingLevel,
-          cwd: parent.cwd ?? null,
-          extensions: [CodingTools, members.get(role.id)!],
-          tools: toolsFor(role),
-        });
+        await configure(tx, child.id, { ...memberChange(role.id), model, thinkingLevel: parent.thinkingLevel, cwd: parent.cwd ?? null });
         return child.id;
       }, ctx);
       host.name(id as number, role.title);
@@ -246,5 +244,16 @@ export function createTeam(host: TeamHost) {
     sections: [section("team", () => [roleDef("lead")!.prompt, context()].filter(Boolean).join("\n\n"), { tag: false })],
   });
 
-  return { lead, members: [...members.values()], list: [lead, ...members.values()] };
+  /** A member's model, prompt extension and tools, as one agent change; durable jobs use it for their reviewers. */
+  const memberChange = (id: TeamRoleId) => {
+    const role = roleDef(id);
+    if (!role || role.id === "lead") throw Error(`Unknown team role ${id}`);
+    return {
+      model: host.route(host.settings().models[role.id] ?? role.defaultModel),
+      extensions: [CodingTools, members.get(role.id)!],
+      tools: toolsFor(role),
+    };
+  };
+
+  return { lead, members: [...members.values()], list: [lead, ...members.values()], memberChange };
 }

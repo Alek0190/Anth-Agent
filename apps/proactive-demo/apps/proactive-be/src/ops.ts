@@ -15,7 +15,7 @@ import {
   type SubmissionId,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { AgentExecutionEnv, agentShellEnv } from "./agent-env.js";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { agentDbPath, repoDir, worktreesDir } from "../../../shared/paths.ts";
 import { lockFile } from "../../../shared/lock.ts";
@@ -69,18 +69,15 @@ export class Ops extends EventEmitter {
 
     const unlock = lockFile(`${agentDbPath}.lock`);
     try {
-      // The agent's shell gets the basics only. API keys stay in this process.
-      const shellEnv = Object.fromEntries(
-        ["PATH", "HOME", "USER", "SHELL", "TMPDIR", "LANG", "TERM"].flatMap((k) =>
-          process.env[k] ? [[k, process.env[k]]] : [],
-        ),
-      );
+      // The agent's shell gets the basics only. API keys stay in this process: AgentExecutionEnv stops pi-durable's
+      // default of passing the whole process environment to every command.
+      const shellEnv = agentShellEnv();
       const harness = await Harness.open(
         await openNodeSqliteStorage(agentDbPath),
         {
           models,
           registry,
-          env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? repoDir, shellEnv }),
+          env: ({ cwd }) => new AgentExecutionEnv({ cwd: cwd ?? repoDir, shellEnv }),
           settings: {
             progress: { partialIntervalMs: 100, outputIntervalMs: 100 },
             // Tool calls run in the order the agent writes them, so its timeline reads in order.
