@@ -337,7 +337,10 @@ try {
   // Durable jobs: the list in Tasks, run cards in the chat with named phases and their steps, stop, an approval that
   // survives a reload, a run the agent starts with its tool, the task tree, stop all and runtime details.
   await tab("Tasks");
-  await expect(page.locator(".job-def")).toHaveCount(3);
+  await expect(page.locator(".job-def")).toHaveCount(5);
+  const shipDef = page.locator(".job-def").filter({ hasText: "Ship" }).first();
+  await expect(shipDef).toContainText("Approve production");
+  await expect(shipDef).toContainText("Promote");
   await page.getByRole("button", { name: "Run Workspace snapshot" }).click();
   const snapshot = chat().locator(".job-run").filter({ hasText: "Workspace snapshot" }).first();
   await expect(snapshot).toContainText("Completed", { timeout: 20000 });
