@@ -1,5 +1,5 @@
-# secrets and this machine's device list (template: dpi-network.example.yaml)
-dpi-network.yaml
+# secrets and this machine's device list (template: anth-network.example.yaml)
+anth-network.yaml
 .env
 .env.*
 !.env.example

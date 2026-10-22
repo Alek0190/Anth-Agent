@@ -1,0 +1,5 @@
+{
+  "name": "anth-hub-server",
+  "private": true,
+  "type": "module"
+}

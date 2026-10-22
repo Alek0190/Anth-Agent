@@ -1,6 +1,6 @@
 ---
 name: agent-sandboxes-exe-dev
-description: "Operate exe.dev persistent VMs via SSH/HTTPS, including the exe-dev devices of this repo's Durable Agent Network (dpi-network.yaml, just net up/status/logs/destroy). Use for persistent dev environments, SSH-accessible Linux VMs, web-exposed sandboxes, or bringing dpi-backend devices online. Keywords: exe.dev, persistent VM, SSH, sandbox, exedev, dpi-network, dpi-backend, just net up."
+description: "Operate exe.dev persistent VMs via SSH/HTTPS, including the exe-dev devices of this repo's Durable Agent Network (anth-network.yaml, just net up/status/logs/destroy). Use for persistent dev environments, SSH-accessible Linux VMs, web-exposed sandboxes, or bringing anth-backend devices online. Keywords: exe.dev, persistent VM, SSH, sandbox, exedev, anth-network, anth-backend, just net up."
 ---
 
 # Agent Sandboxes (exe.dev)
@@ -18,9 +18,9 @@ If you already know `/agent-sandboxes`, the `sbx → exedev` mapping below cover
 
 ## Durable Agent Network (this repo)
 
-This copy also operates the repo's **Durable Agent Network**. Every device in `dpi-network.yaml` runs `apps/dpi-backend`; exe.dev VMs are devices of `kind: exe-dev`. Read [`cookbook/dpi-network.md`](cookbook/dpi-network.md) before touching them.
+This copy also operates the repo's **Durable Agent Network**. Every device in `anth-network.yaml` runs `apps/anth-backend`; exe.dev VMs are devices of `kind: exe-dev`. Read [`cookbook/anth-network.md`](cookbook/anth-network.md) before touching them.
 
-- **Only touch VMs named in `dpi-network.yaml`.** Other VMs on the account belong to other work. Never `vm kill`, `rm`, `share set-private` or `exec` on a VM that is not listed there.
+- **Only touch VMs named in `anth-network.yaml`.** Other VMs on the account belong to other work. Never `vm kill`, `rm`, `share set-private` or `exec` on a VM that is not listed there.
 - **Use the generic recipes, not hand-rolled commands:** `just net up <id>`, `just net status`, `just net logs <id>`, `just net restart <id>`, `just net deploy <id>`, `just net destroy <id>` (exe-dev only, confirms first). They read every machine fact from the YAML.
 - The `exedev` CLI below stays useful for inspection (`vm list`, `vm info`, `exec`, `files`) and browser checks against `https://<vm>.exe.xyz`.
 
@@ -250,7 +250,7 @@ uv run exedev vm snapshot <vm_name> <vm_name>-archive
 | Feature            | When to read                                                            | Documentation                              |
 | ------------------ | ----------------------------------------------------------------------- | ------------------------------------------ |
 | Browser Automation | When validating UIs, taking screenshots, or interacting with web pages  | [cookbook/browser.md](cookbook/browser.md) |
-| Durable Agent Network | Bringing `kind: exe-dev` devices from `dpi-network.yaml` online, debugging them, rotating tokens, tearing them down | [cookbook/dpi-network.md](cookbook/dpi-network.md) |
+| Durable Agent Network | Bringing `kind: exe-dev` devices from `anth-network.yaml` online, debugging them, rotating tokens, tearing them down | [cookbook/anth-network.md](cookbook/anth-network.md) |
 | Fleet download-all / restore | When archiving every VM locally (the pause/resume substitute — VMs bill until killed) or recreating a killed VM byte-for-byte at the same URL | [cookbook/fleet.md](cookbook/fleet.md) |
 
 ## Examples
