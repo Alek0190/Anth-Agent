@@ -17,13 +17,18 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 |---|---|---|
 | `GET /healthz` | (no auth) | `{ok:true}` |
 | `GET /v1/device` | | `DeviceInfo`: uid, name, hostname, platform, `apiVersion`, `durableVersion`, `startedAt`, models, `defaultModel`, `startDirs`, storage, `codeDir` (the checkout it runs from), capabilities, `jobs` (durable job definitions) |
-| `GET /v1/tree` | | `DeviceTree`: sessions with agents and busy/background |
+| `GET /v1/tree` | | `DeviceTree`: sessions with agents and busy/background, plus `clients` and `projects` |
+| `GET /v1/clients` | | `ClientSummary[]` `{slug, name, createdAt}`, sorted by name |
+| `PUT /v1/clients/:client` | `{name}` | `ClientSummary`. Creates the client or renames it; repeating the call changes nothing. Ids are lowercase letters, digits and dashes (max 48) |
+| `GET /v1/projects` | | `ProjectSummary[]` `{client, slug, name, createdAt}` |
+| `PUT /v1/projects/:client/:project` | `{name, clientName?}` | `ProjectSummary`. Creates the project (and its client, named `clientName`, when missing) or renames it. The ref `<client>/<project>` is the project's id on every device: register it on each device that runs one of its environments |
+| `GET /v1/projects/:client/:project` | | the project plus `sessions` (ids on this device) |
 | `GET /v1/events` | `?docs=app.shared-state` | device stream |
 | `GET /v1/fs/dirs` | `?path=` (empty = start dirs) | `{path, parent, dirs[]}`, one level, directories only |
 | `GET /v1/docs/app.shared-state` | | `{kind, value, revision}` |
 | `GET /v1/sessions` | | `SessionSummary[]` |
-| `POST /v1/sessions` | `{name, cwd, model:{provider,modelId}, thinkingLevel?}` | `201 SessionSummary` |
-| `GET / PATCH / DELETE /v1/sessions/:s` | PATCH `{name}` | summary (with its `compaction` thresholds); DELETE aborts all work, moves the files to `archive/` and returns `{archived}` |
+| `POST /v1/sessions` | `{name, cwd, model:{provider,modelId}, thinkingLevel?, project?, env?}` | `201 SessionSummary`. `project` is `<client>/<project>` and must exist on this device (`404` otherwise); `env` is `dev`, `staging` or `prod` and defaults to `dev`; `env` without `project` is `400` |
+| `GET / PATCH / DELETE /v1/sessions/:s` | PATCH `{name?, project?, env?}` (`project: null` moves it out of its project) | summary (with its `compaction` thresholds); DELETE aborts all work, moves the files to `archive/` and returns `{archived}` |
 | `GET / PATCH /v1/sessions/:s/compaction` | PATCH `{enabled?, reserveTokens?, backgroundTokens?, keepRecentTokens?}` | the session's automatic compaction thresholds, read by pi-durable at its next request. Values are margins: the blocking summary starts at the model's context window minus `reserveTokens`, and the background one `backgroundTokens` earlier (0 turns it off). Default: a background summary at 200k tokens and a blocking one at 250k, or pi-durable's margins on smaller windows. Switching an agent to a window the thresholds do not fit refits them |
 | `GET /v1/sessions/:s/events` | | session stream |
 | `GET /v1/sessions/:s/tasks` | `?status=live\|terminal&limit=` | task nodes / recent outcomes |
@@ -96,4 +101,9 @@ curl -s -X POST $U/v1/sessions/my-session/agents/main/messages -H "Authorization
 curl -s "$U/v1/sessions/my-session/agents/main/transcript?format=markdown" -H "Authorization: Bearer $T" | jq -r .text
 # Watch everything on a device:
 curl -sN $U/v1/events -H "Authorization: Bearer $T"
+# A client project with a prod session on this device (PUT is safe to repeat):
+curl -s -X PUT $U/v1/projects/dental-co/booking-site -H "Authorization: Bearer $T" \
+  -H 'content-type: application/json' -d '{"name":"Booking site","clientName":"Dental Co"}'
+curl -s -X POST $U/v1/sessions -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"name":"On call","cwd":"~/anth-work","model":{"provider":"openrouter","modelId":"anthropic/claude-sonnet-5.5"},"project":"dental-co/booking-site","env":"prod"}'
 ```

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Plus, X } from "lucide-vue-next";
+import { ENVIRONMENTS, type EnvironmentName } from "@sdk/api";
 import DirBrowser from "./DirBrowser.vue";
 import { deviceClient, message } from "../client/hub";
-import { network, notify, select } from "../client/store";
+import { ensureProject, knownProjects, network, notify, select } from "../client/store";
 
-const props = defineProps<{ deviceId?: string }>();
+const props = defineProps<{ deviceId?: string; project?: string; env?: EnvironmentName }>();
 const emit = defineEmits<{ close: [] }>();
 
 const devices = computed(() => network.devices.value.filter((d) => d.status === "online"));
@@ -16,6 +17,8 @@ const device = computed(() => devices.value.find((d) => d.id === deviceId.value)
 const models = computed(() => device.value?.info?.models ?? []);
 const key = (m: { provider: string; id: string }) => `${m.provider}/${m.id}`;
 const draft = ref({ name: "", cwd: "", model: "" });
+const project = ref(props.project ?? "");
+const env = ref<EnvironmentName>(props.env ?? "dev");
 const pending = ref(false);
 const error = ref("");
 
@@ -37,14 +40,20 @@ async function create() {
   try {
     const model = models.value.find((m) => key(m) === draft.value.model);
     if (!model) throw Error("Choose a model");
+    if (project.value) await ensureProject(device.value.id, project.value);
     const created = await deviceClient(device.value.id).createSession({
       name: draft.value.name.trim() || "New session",
       cwd: draft.value.cwd.trim(),
       model: { provider: model.provider, modelId: model.id },
+      ...(project.value ? { project: project.value, env: env.value } : {}),
     });
     const root = created.agents.find((a) => a.kind === "root") ?? created.agents[0];
     select({ deviceId: device.value.id, sessionId: created.id, agentId: root?.id ?? 1 });
-    notify(`Session created on ${device.value.id}.`);
+    notify(
+      project.value
+        ? `Session created in ${project.value} · ${env.value} on ${device.value.id}.`
+        : `Session created on ${device.value.id}.`,
+    );
     emit("close");
   } catch (e) {
     error.value = message(e);
@@ -72,7 +81,8 @@ async function create() {
         </button>
       </header>
       <p v-if="!devices.length" class="message-error">
-        No device is online. Start one with just backend run or just net up &lt;id&gt;, then try again.
+        No device is online. Start one with just backend run or just net up &lt;id&gt;, then try
+        again.
       </p>
       <template v-else>
         <label
@@ -80,6 +90,19 @@ async function create() {
             <option v-for="d in devices" :key="d.id" :value="d.id">
               {{ d.id }} · {{ d.info?.hostname ?? d.url }}
             </option>
+          </select></label
+        >
+        <label
+          >Project<select v-model="project" aria-label="Project">
+            <option value="">No project</option>
+            <option v-for="p in knownProjects" :key="p.ref" :value="p.ref">
+              {{ p.client.name }} / {{ p.project.name }}
+            </option>
+          </select></label
+        >
+        <label v-if="project"
+          >Environment<select v-model="env" aria-label="Environment">
+            <option v-for="e in ENVIRONMENTS" :key="e" :value="e">{{ e }}</option>
           </select></label
         >
         <label

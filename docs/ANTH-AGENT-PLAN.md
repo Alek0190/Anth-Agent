@@ -129,7 +129,7 @@ UI: Clients → Projects → Environments tree; approval inbox on top; project h
 ## Build roadmap
 
 1. **Fork and run.** Fork as Anth-Agent, rename, run in WSL2 plus one cloud VM. *Done when:* `just check` passes and the UI shows both devices. **(rename done in this commit)**
-2. **Client → Project → Environment.** Catalog tables, API routes, left tree. *Done when:* a client and project exist and sessions show under them.
+2. **Client → Project → Environment.** Catalog tables, API routes, left tree. *Done when:* a client and project exist and sessions show under them. **(done: `PUT /v1/projects/:client/:project`, sessions carry `project` + `env`, the hub tree merges Clients → Projects → Environments across devices)**
 3. **Agent team.** Port mydev's roles as extensions. *Done when:* the Lead plans a small app and the team builds it in a sandbox.
 4. **Ship job.** plan → build → test → review → approve → deploy (Vercel) → verify. *Done when:* the Anthward website ships through one approval.
 5. **Watch and fix.** Sentry/Vercel logs → Jev → thresholds → incident agent → fix → approval. *Done when:* an injected bug is fixed and waiting in under 5 minutes.

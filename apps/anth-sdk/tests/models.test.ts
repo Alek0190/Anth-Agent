@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AgentModel, SessionModel, networkTree, lineage } from "../src/models.js";
+import { AgentModel, SessionModel, networkTree, projectTree, placementKeys, lineage } from "../src/models.js";
 import { toMarkdown, toTranscript, sumUsage } from "../src/transcript.js";
 import type {
   AgentSummary,
@@ -200,6 +200,55 @@ test("session lineage and network tree nest forks and subagents", () => {
   assert.deepEqual(main.children.map((n) => n.type === "agent" && n.agent.id), [4]);
   assert.deepEqual(main.children[0].children.map((n) => n.type === "agent" && n.agent.id), [6]);
   assert.equal(networkTree([{ ...device, status: "offline" }])[0].stale, true);
+});
+
+test("project tree merges clients and projects across devices; unassigned sessions stay under devices", () => {
+  const agents: AgentSummary[] = [{ id: 1, name: "Main", named: false, kind: "root", busy: false, background: 0 }];
+  const session = (id: string, name: string, project?: string, env?: "dev" | "staging" | "prod") => ({
+    id, name, cwd: "/w", model: "m", createdAt: 1, dbPath: "/d", busy: false, agents, ...(project ? { project, env } : {}),
+  });
+  const base = { kind: "ssh" as const, source: "config" as const, hasToken: true, url: "http://x" };
+  const laptop: NetworkDevice = {
+    ...base, id: "laptop", name: "Laptop", status: "online",
+    tree: {
+      uid: "a", name: "laptop", at: 1,
+      clients: [{ slug: "dental-co", name: "Dental Co", createdAt: 1 }],
+      projects: [{ client: "dental-co", slug: "booking-site", name: "Booking site", createdAt: 1 }],
+      sessions: [session("s1", "Build", "dental-co/booking-site", "dev"), session("s2", "Scratch")],
+    },
+  };
+  const vm: NetworkDevice = {
+    ...base, id: "vm", name: "VM", status: "offline",
+    tree: {
+      uid: "b", name: "vm", at: 1,
+      clients: [{ slug: "dental-co", name: "Dental Co", createdAt: 1 }, { slug: "acme", name: "Acme", createdAt: 2 }],
+      projects: [
+        { client: "dental-co", slug: "booking-site", name: "Booking site", createdAt: 1 },
+        { client: "acme", slug: "shop", name: "Shop", createdAt: 2 },
+      ],
+      sessions: [session("s3", "On call", "dental-co/booking-site", "prod"), session("s4", "Stage", "dental-co/booking-site", "staging")],
+    },
+  };
+  const tree = projectTree([laptop, vm]);
+  // Clients sort by name; one Dental Co for both devices.
+  assert.deepEqual(tree.map((n) => n.type === "client" && n.client.name), ["Acme", "Dental Co"]);
+  const [acme, dental] = tree;
+  assert.equal(acme.stale, true, "only the offline VM knows Acme");
+  assert.equal(dental.stale, false);
+  const [site] = dental.children;
+  assert.equal(site.type === "project" && site.deviceIds.join(","), "laptop,vm");
+  assert.equal(site.key, "c/dental-co/p/booking-site");
+  // Environments in dev, staging, prod order, each with sessions from whichever device runs them.
+  assert.deepEqual(site.children.map((n) => n.type === "env" && n.env), ["dev", "staging", "prod"]);
+  assert.deepEqual(site.children.map((n) => n.stale), [false, true, true]);
+  const prod = site.children[2];
+  assert.equal(prod.children[0].key, "vm/s/s3", "session keys are the same as under a device");
+  assert.equal(acme.children[0].children.length, 0, "a project with no sessions has no environments");
+  // Devices keep only the sessions without a project.
+  assert.deepEqual(networkTree([laptop, vm]).map((d) => d.children.map((s) => s.key)), [["laptop/s/s2"], []]);
+  assert.deepEqual(placementKeys("dental-co/booking-site", "prod"), ["c/dental-co", "c/dental-co/p/booking-site", "c/dental-co/p/booking-site/e/prod"]);
+  // A device older than projects (no clients/projects arrays) still renders.
+  assert.deepEqual(projectTree([{ ...laptop, tree: { uid: "a", name: "l", at: 1, sessions: [session("s9", "Old")] } }]), []);
 });
 
 test("a recorded real stream (anth-backend + pi-durable watchEvents) reduces to the server's transcript", async () => {

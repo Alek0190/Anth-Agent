@@ -5,8 +5,10 @@ import type {
   AgentExtensions,
   AgentRef,
   AgentSummary,
+  ClientSummary,
   CreateSessionBody,
   DeviceInfo,
+  EnvironmentName,
   DeviceTree,
   DirListing,
   InboxItem,
@@ -19,9 +21,13 @@ import type {
   ThinkingLevel,
   UsageTotals,
   WhenBusy,
+  ProjectSummary,
+  UpdateSessionBody,
   WireEntry,
 } from "../../anth-sdk/src/api.js";
 import {
+  ENVIRONMENTS,
+  isSlug,
   compactionFits,
   DEFAULT_COMPACTION,
   defaultCompaction,
@@ -84,6 +90,9 @@ export type SessionRow = {
   createdAt: number;
   model: string;
   provider: string;
+  /** `<client>/<project>` or null; env is set whenever project is. */
+  project: string | null;
+  env: EnvironmentName | null;
 };
 
 export interface StoreOptions {
@@ -197,7 +206,15 @@ export class Store {
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(key TEXT PRIMARY KEY,route TEXT NOT NULL,status INTEGER NOT NULL,body TEXT NOT NULL,createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS session_spawns(key TEXT PRIMARY KEY,sessionId TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS session_compaction(sessionId TEXT PRIMARY KEY,settings TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS session_compaction(sessionId TEXT PRIMARY KEY,settings TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS clients(slug TEXT PRIMARY KEY,name TEXT NOT NULL,createdAt INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS projects(client TEXT NOT NULL REFERENCES clients(slug),slug TEXT NOT NULL,name TEXT NOT NULL,createdAt INTEGER NOT NULL,PRIMARY KEY(client,slug));`);
+    // Catalogs from before projects: sessions gain a nullable project and environment.
+    const columns = new Set(
+      (this.catalog.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map((c) => c.name),
+    );
+    if (!columns.has("project")) this.catalog.exec("ALTER TABLE sessions ADD COLUMN project TEXT");
+    if (!columns.has("env")) this.catalog.exec("ALTER TABLE sessions ADD COLUMN env TEXT");
     const uid = this.catalog.prepare("SELECT value FROM meta WHERE key='device_uid'").get() as
       | { value: string }
       | undefined;
@@ -407,6 +424,7 @@ export class Store {
     const model = this.validateModel(body.model);
     if (body.thinkingLevel !== undefined && !THINKING_LEVELS.includes(body.thinkingLevel))
       throw invalid("Invalid thinking level");
+    const placement = this.placement(body.project, body.env);
     const id = randomUUID();
     const row: SessionRow = {
       id,
@@ -416,13 +434,17 @@ export class Store {
       createdAt: Date.now(),
       model: model.modelId,
       provider: model.provider,
+      project: placement.project,
+      env: placement.env,
     };
     await this.openAgent(row, true, body.thinkingLevel ?? "low");
     this.catalog.exec("BEGIN");
     try {
       this.catalog
-        .prepare("INSERT INTO sessions VALUES(?,?,?,?,?,?,?)")
-        .run(id, row.name, cwd, row.dbPath, row.createdAt, row.model, row.provider);
+        .prepare(
+          "INSERT INTO sessions(id,name,cwd,dbPath,createdAt,model,provider,project,env) VALUES(?,?,?,?,?,?,?,?,?)",
+        )
+        .run(id, row.name, cwd, row.dbPath, row.createdAt, row.model, row.provider, row.project, row.env);
       if (spawnKey) this.catalog.prepare("INSERT OR REPLACE INTO session_spawns VALUES(?,?)").run(spawnKey, id);
       this.catalog.exec("COMMIT");
     } catch (e) {
@@ -455,10 +477,97 @@ export class Store {
   };
 
   rename(row: SessionRow, name: unknown) {
-    if (typeof name !== "string" || !name.trim()) throw invalid("A name is required");
-    this.catalog.prepare("UPDATE sessions SET name=? WHERE id=?").run(name.trim().slice(0, 100), row.id);
+    return this.updateSession(row, { name: name as string });
+  }
+
+  /** PATCH /v1/sessions/:s: rename, move into or out of a project, or change environment. */
+  updateSession(row: SessionRow, body: UpdateSessionBody) {
+    const b = (body ?? {}) as Record<string, unknown>;
+    if (b.name === undefined && b.project === undefined && b.env === undefined)
+      throw invalid("Nothing to change: send name, project or env");
+    if (b.name !== undefined && (typeof b.name !== "string" || !b.name.trim())) throw invalid("A name is required");
+    let placement = { project: row.project, env: row.env };
+    if (b.project === null) {
+      if (b.env !== undefined) throw invalid("env needs a project");
+      placement = { project: null, env: null };
+    } else if (b.project !== undefined || b.env !== undefined)
+      placement = this.placement(b.project ?? row.project ?? undefined, b.env ?? (b.project === undefined ? undefined : row.env ?? undefined));
+    this.catalog
+      .prepare("UPDATE sessions SET name=?,project=?,env=? WHERE id=?")
+      .run(typeof b.name === "string" ? b.name.trim().slice(0, 100) : row.name, placement.project, placement.env, row.id);
     this.notify();
     return this.sessionSummary(this.row(row.id));
+  }
+
+  // ------------------------------------------------------------ clients and projects
+
+  clients(): ClientSummary[] {
+    return this.catalog.prepare("SELECT slug,name,createdAt FROM clients ORDER BY name COLLATE NOCASE").all() as unknown as ClientSummary[];
+  }
+
+  projects(): ProjectSummary[] {
+    return this.catalog
+      .prepare("SELECT client,slug,name,createdAt FROM projects ORDER BY client, name COLLATE NOCASE")
+      .all() as unknown as ProjectSummary[];
+  }
+
+  project(client: string, slug: string): ProjectSummary {
+    const found = this.catalog
+      .prepare("SELECT client,slug,name,createdAt FROM projects WHERE client=? AND slug=?")
+      .get(client, slug) as unknown as ProjectSummary | undefined;
+    if (!found) throw notFound(`No project ${client}/${slug} on ${this.name}`);
+    return found;
+  }
+
+  /** PUT /v1/clients/:client: create the client, or rename it. Repeating the call changes nothing. */
+  upsertClient(slug: string, body: { name?: unknown }) {
+    if (!isSlug(slug)) throw invalid("Client id must be lowercase letters, digits and dashes (max 48)");
+    const name = typeof body?.name === "string" && body.name.trim() ? body.name.trim().slice(0, 100) : undefined;
+    const existing = this.catalog.prepare("SELECT slug FROM clients WHERE slug=?").get(slug);
+    if (existing) {
+      if (name) this.catalog.prepare("UPDATE clients SET name=? WHERE slug=?").run(name, slug);
+    } else this.catalog.prepare("INSERT INTO clients VALUES(?,?,?)").run(slug, name ?? slug, Date.now());
+    this.notify();
+    return this.clients().find((c) => c.slug === slug)!;
+  }
+
+  /** PUT /v1/projects/:client/:project: create the project (and its client when missing), or rename it. */
+  upsertProject(client: string, slug: string, body: { name?: unknown; clientName?: unknown }) {
+    if (!isSlug(client)) throw invalid("Client id must be lowercase letters, digits and dashes (max 48)");
+    if (!isSlug(slug)) throw invalid("Project id must be lowercase letters, digits and dashes (max 48)");
+    const name = typeof body?.name === "string" && body.name.trim() ? body.name.trim().slice(0, 100) : undefined;
+    this.catalog.exec("BEGIN");
+    try {
+      if (!this.catalog.prepare("SELECT slug FROM clients WHERE slug=?").get(client)) {
+        const clientName =
+          typeof body?.clientName === "string" && body.clientName.trim() ? body.clientName.trim().slice(0, 100) : client;
+        this.catalog.prepare("INSERT INTO clients VALUES(?,?,?)").run(client, clientName, Date.now());
+      }
+      if (this.catalog.prepare("SELECT slug FROM projects WHERE client=? AND slug=?").get(client, slug)) {
+        if (name) this.catalog.prepare("UPDATE projects SET name=? WHERE client=? AND slug=?").run(name, client, slug);
+      } else this.catalog.prepare("INSERT INTO projects VALUES(?,?,?,?)").run(client, slug, name ?? slug, Date.now());
+      this.catalog.exec("COMMIT");
+    } catch (e) {
+      this.catalog.exec("ROLLBACK");
+      throw e;
+    }
+    this.notify();
+    return this.project(client, slug);
+  }
+
+  /** Validate a session's project ref and environment. No project means no environment. */
+  private placement(project: unknown, env: unknown): { project: string | null; env: EnvironmentName | null } {
+    if (project === undefined || project === null || project === "") {
+      if (env !== undefined && env !== null) throw invalid("env needs a project");
+      return { project: null, env: null };
+    }
+    if (typeof project !== "string" || !/^[^/]+\/[^/]+$/.test(project))
+      throw invalid("project must be <client>/<project>");
+    const [client, slug] = project.split("/");
+    this.project(client, slug);
+    if (env !== undefined && !ENVIRONMENTS.includes(env as EnvironmentName))
+      throw invalid(`env must be one of ${ENVIRONMENTS.join(", ")}`);
+    return { project, env: (env as EnvironmentName | undefined) ?? "dev" };
   }
 
   /** Stop all work, close the harness and move its files to archive/. Nothing is deleted. */
@@ -1078,6 +1187,7 @@ export class Store {
       createdAt: row.createdAt,
       dbPath: row.dbPath,
       compaction: this.compactionOf(row.id),
+      ...(row.project ? { project: row.project, env: row.env ?? "dev" } : {}),
     };
   }
 
@@ -1090,7 +1200,14 @@ export class Store {
 
   async tree(): Promise<DeviceTree> {
     const sessions = await Promise.all(this.list().map((row) => this.sessionSummary(row)));
-    return { uid: this.uid, name: this.name, sessions, at: Date.now() };
+    return {
+      uid: this.uid,
+      name: this.name,
+      sessions,
+      clients: this.clients(),
+      projects: this.projects(),
+      at: Date.now(),
+    };
   }
 
   // ------------------------------------------------------------ demo extension

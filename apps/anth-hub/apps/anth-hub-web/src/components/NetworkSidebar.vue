@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { Network, PanelLeftClose, PanelLeftOpen } from "lucide-vue-next";
+import { FolderPlus, Network, PanelLeftClose, PanelLeftOpen } from "lucide-vue-next";
 import DeviceIcon from "./DeviceIcon.vue";
 import type { TreeNode } from "@sdk/models";
 import TreeRow from "./TreeRow.vue";
@@ -18,32 +18,44 @@ import {
   panelKeys,
 } from "../client/store";
 
+type Section = "clients" | "devices";
 interface Row {
   node: TreeNode;
   depth: number;
   parent?: string;
+  section: Section;
 }
 
 const rows = computed(() => {
   const out: Row[] = [];
-  const walk = (nodes: TreeNode[], depth: number, parent?: string) => {
+  const walk = (nodes: TreeNode[], depth: number, section: Section, parent?: string) => {
     for (const node of nodes) {
-      out.push({ node, depth, parent });
+      out.push({ node, depth, parent, section });
       if (node.children.length && expanded.value.has(node.key))
-        walk(node.children, depth + 1, node.key);
+        walk(node.children, depth + 1, section, node.key);
     }
   };
-  walk(network.tree.value, 0);
+  walk(network.projects.value, 0, "clients");
+  walk(network.tree.value, 0, "devices");
   return out;
 });
+const clientRows = computed(() => rows.value.filter((r) => r.section === "clients"));
+const deviceRows = computed(() => rows.value.filter((r) => r.section === "devices"));
+const anyOnline = computed(() => network.devices.value.some((d) => d.status === "online"));
 const focusKey = ref<string>();
 const list = ref<HTMLElement>();
 
 const deviceOf = (node: TreeNode) =>
-  network.devices.value.find(
-    (d) => d.id === (node.type === "device" ? node.device.id : node.deviceId),
-  );
-const isOnline = (node: TreeNode) => deviceOf(node)?.status === "online";
+  node.type === "client" || node.type === "project" || node.type === "env"
+    ? undefined
+    : network.devices.value.find(
+        (d) => d.id === (node.type === "device" ? node.device.id : node.deviceId),
+      );
+/** Client, project and environment rows are live when any device behind them is online. */
+const isOnline = (node: TreeNode) =>
+  node.type === "client" || node.type === "project" || node.type === "env"
+    ? !node.stale
+    : deviceOf(node)?.status === "online";
 const isSelected = (node: TreeNode) =>
   node.type === "agent" &&
   selected.value?.deviceId === node.deviceId &&
@@ -52,7 +64,13 @@ const isSelected = (node: TreeNode) =>
 
 function activate(node: TreeNode) {
   focusKey.value = node.key;
-  if (node.type === "device") return toggle(node.key);
+  if (
+    node.type === "device" ||
+    node.type === "client" ||
+    node.type === "project" ||
+    node.type === "env"
+  )
+    return toggle(node.key);
   if (node.type === "agent")
     return select({ deviceId: node.deviceId, sessionId: node.sessionId, agentId: node.agent.id });
   const root = node.session.agents.find((a) => a.kind === "root") ?? node.session.agents[0];
@@ -61,6 +79,21 @@ function activate(node: TreeNode) {
 }
 
 async function action(node: TreeNode, name: string) {
+  if (node.type === "client") {
+    if (name === "new-project") ui.dialog = { kind: "new-project", client: node.client.slug };
+    return;
+  }
+  if (node.type === "project" || node.type === "env") {
+    const ref = `${node.project.client}/${node.project.slug}`;
+    if (name === "new-session")
+      ui.dialog = {
+        kind: "new-session",
+        project: ref,
+        env: node.type === "env" ? node.env : undefined,
+        deviceId: node.type === "project" ? node.deviceIds[0] : undefined,
+      };
+    return;
+  }
   const device = deviceOf(node);
   if (!device) return;
   const client = deviceClient(device.id);
@@ -77,7 +110,9 @@ async function action(node: TreeNode, name: string) {
         select({ deviceId: device.id, sessionId: s.id, agentId: created.id });
         notify("New agent. Same session, same shared App State.");
       }
-    } else if (name === "rename")
+    } else if (name === "assign")
+      ui.dialog = { kind: "assign", deviceId: device.id, sessionId: s.id };
+    else if (name === "rename")
       ui.dialog = {
         kind: "prompt",
         title: "Rename session",
@@ -169,12 +204,24 @@ function keydown(e: KeyboardEvent) {
         class="tree-list"
         role="tree"
         tabindex="0"
-        aria-label="Devices, sessions and agents"
+        aria-label="Clients, projects, devices, sessions and agents"
         @keydown="keydown"
         @focus="focusFirst"
       >
+        <div class="tree-section" role="presentation">
+          <span>CLIENTS</span>
+          <button
+            class="icon-button"
+            aria-label="New project"
+            title="New project (and client)"
+            :disabled="!anyOnline"
+            @click.stop="ui.dialog = { kind: 'new-project' }"
+          >
+            <FolderPlus :size="16" />
+          </button>
+        </div>
         <TreeRow
-          v-for="row in rows"
+          v-for="row in clientRows"
           :key="row.node.key"
           :node="row.node"
           :depth="row.depth"
@@ -186,7 +233,24 @@ function keydown(e: KeyboardEvent) {
           @activate="activate(row.node)"
           @action="action(row.node, $event)"
         />
-        <p v-if="!rows.length" class="hint tree-empty">
+        <p v-if="!clientRows.length" class="hint tree-empty">
+          No clients yet. Create a project to start one.
+        </p>
+        <div class="tree-section" role="presentation"><span>DEVICES</span></div>
+        <TreeRow
+          v-for="row in deviceRows"
+          :key="row.node.key"
+          :node="row.node"
+          :depth="row.depth"
+          :open="expanded.has(row.node.key)"
+          :selected="isSelected(row.node)"
+          :focused="focusKey === row.node.key"
+          :online="isOnline(row.node)"
+          @toggle="toggle(row.node.key)"
+          @activate="activate(row.node)"
+          @action="action(row.node, $event)"
+        />
+        <p v-if="!deviceRows.length" class="hint tree-empty">
           No devices yet. Declare them in <code>anth-network.yaml</code> (start from
           <code>anth-network.example.yaml</code>), then run <code>just net up &lt;id&gt;</code>.
         </p>

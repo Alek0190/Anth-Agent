@@ -4,7 +4,7 @@
 
 Anth-Agent is a fork of [disler/durable-pi](https://github.com/disler/durable-pi) (MIT), built on [pi-durable](https://earendil.com/posts/pi-durable/) from the team behind the [Pi coding agent](https://github.com/earendil-works/pi). Every device runs `anth-backend`, which owns its agents, their SQLite databases and their tools. Clients connect with a **URL and a bearer token**: the web hub, `anth-tui` in the terminal, or one `curl`. **The agent lives on the device, not in the client.** Close the browser, quit the terminal or restart the machine mid-tool, and the run picks up from its last checkpoint.
 
-**Plan:** [`docs/ANTH-AGENT-PLAN.md`](docs/ANTH-AGENT-PLAN.md) has the architecture and the seven-phase roadmap. This commit is Phase 1 (fork and rename).
+**Plan:** [`docs/ANTH-AGENT-PLAN.md`](docs/ANTH-AGENT-PLAN.md) has the architecture and the seven-phase roadmap. Done so far: Phase 1 (fork and rename) and Phase 2 (Clients → Projects → Environments: each device stores clients and projects, sessions carry a project and an environment, and the hub tree merges them across devices).
 
 | Upstream name | Anth-Agent name |
 |---|---|
