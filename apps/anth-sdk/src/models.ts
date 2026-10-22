@@ -2,10 +2,13 @@
 // notifications, so Vue, the TUI or any other renderer can sit on top without knowing the wire.
 import type {
   AgentSummary,
+  ClientSummary,
   DeviceStatus,
+  EnvironmentName,
   Frame,
   InboxItem,
   NetworkDevice,
+  ProjectSummary,
   SessionSummary,
   TaskNode,
   UsageTotals,
@@ -18,6 +21,7 @@ import type {
   WireSnapshotEvent,
   WireUsageState,
 } from "./api.js";
+import { ENVIRONMENTS, projectRef } from "./api.js";
 import { toTranscript, type LiveTool, type TranscriptItem } from "./transcript.js";
 
 type Listener = () => void;
@@ -333,6 +337,31 @@ export function lineage(agents: readonly AgentSummary[], id: number): AgentSumma
 
 export type TreeNode =
   | {
+      type: "client";
+      key: string;
+      client: ClientSummary;
+      /** True when no device that knows this client is online. */
+      stale: boolean;
+      children: TreeNode[];
+    }
+  | {
+      type: "project";
+      key: string;
+      project: ProjectSummary;
+      /** Devices that have this project registered, in network order. */
+      deviceIds: string[];
+      stale: boolean;
+      children: TreeNode[];
+    }
+  | {
+      type: "env";
+      key: string;
+      project: ProjectSummary;
+      env: EnvironmentName;
+      stale: boolean;
+      children: TreeNode[];
+    }
+  | {
       type: "device";
       key: string;
       device: NetworkDevice;
@@ -358,6 +387,14 @@ export type TreeNode =
       children: TreeNode[];
     };
 
+/** Tree key of a client row. */
+export const clientKey = (client: string) => `c/${client}`;
+/** Tree key of a project row, from its `<client>/<project>` ref. */
+export const projectKey = (ref: string) => `c/${ref.split("/")[0]}/p/${ref.split("/")[1]}`;
+/** Tree key of one environment row of a project. */
+export const envKey = (ref: string, env: string) => `${projectKey(ref)}/e/${env}`;
+/** The tree keys to open so a session in this project and environment is visible. */
+export const placementKeys = (ref: string, env: string) => [clientKey(ref.split("/")[0]), projectKey(ref), envKey(ref, env)];
 export const deviceKey = (deviceId: string) => deviceId;
 export const sessionKey = (deviceId: string, sessionId: string) => `${deviceId}/s/${sessionId}`;
 export const agentKey = (deviceId: string, sessionId: string, agentId: number) =>
@@ -385,6 +422,101 @@ export function agentTree(deviceId: string, session: SessionSummary, stale: bool
   return roots;
 }
 
+/** A session row with its agents nested under it; the key is the same wherever the session shows. */
+const sessionNode = (deviceId: string, session: SessionSummary, stale: boolean): TreeNode => ({
+  type: "session",
+  key: sessionKey(deviceId, session.id),
+  deviceId,
+  session,
+  stale,
+  children: agentTree(deviceId, session, stale),
+});
+
+/**
+ * Clients → projects → environments → sessions, merged across devices: a client or project is the same one on every
+ * device that has its id, and each environment lists the sessions of every device. Sessions without a project stay
+ * under their device (`networkTree`).
+ */
+export function projectTree(devices: readonly NetworkDevice[]): TreeNode[] {
+  type ProjectNode = Extract<TreeNode, { type: "project" }>;
+  type EnvNode = Extract<TreeNode, { type: "env" }>;
+  const clients = new Map<string, { client: ClientSummary; online: boolean; projects: Map<string, ProjectNode> }>();
+  const onlineProjects = new Set<string>();
+  const envs = new Map<string, EnvNode>();
+
+  /** The merged entry for a client id, created on first sight. */
+  const clientOf = (slug: string) => {
+    let entry = clients.get(slug);
+    if (!entry) {
+      entry = { client: { slug, name: slug, createdAt: 0 }, online: false, projects: new Map() };
+      clients.set(slug, entry);
+    }
+    return entry;
+  };
+  /** The merged project row for a ref; records which devices have it and whether any of them is online. */
+  const projectOf = (ref: string, deviceId: string, online: boolean, summary?: ProjectSummary) => {
+    const [client, slug] = ref.split("/");
+    const entry = clientOf(client);
+    entry.online ||= online;
+    let node = entry.projects.get(slug);
+    if (!node) {
+      const project = summary ?? { client, slug, name: slug, createdAt: 0 };
+      node = { type: "project", key: projectKey(ref), project, deviceIds: [], stale: true, children: [] };
+      entry.projects.set(slug, node);
+    }
+    if (summary && !node.project.createdAt) node.project = summary;
+    if (!node.deviceIds.includes(deviceId)) node.deviceIds.push(deviceId);
+    if (online) onlineProjects.add(ref);
+    return node;
+  };
+
+  for (const device of devices) {
+    const online = device.status === "online";
+    const tree = device.tree;
+    for (const c of tree?.clients ?? []) {
+      const entry = clientOf(c.slug);
+      if (!entry.client.createdAt) entry.client = c;
+      entry.online ||= online;
+    }
+    for (const p of tree?.projects ?? []) projectOf(projectRef(p), device.id, online, p);
+    for (const session of tree?.sessions ?? []) {
+      if (!session.project) continue;
+      const project = projectOf(session.project, device.id, online);
+      const env = session.env ?? "dev";
+      const key = envKey(session.project, env);
+      let node = envs.get(key);
+      if (!node) {
+        node = { type: "env", key, project: project.project, env, stale: true, children: [] };
+        envs.set(key, node);
+        project.children.push(node);
+      }
+      node.stale &&= !online;
+      node.children.push(sessionNode(device.id, session, !online));
+    }
+  }
+
+  /** Case-insensitive name order. */
+  const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+  /** dev, then staging, then prod. */
+  const envOrder = (n: TreeNode) => ENVIRONMENTS.indexOf((n as EnvNode).env);
+  return [...clients.values()]
+    .sort((a, b) => byName(a.client.name, b.client.name))
+    .map((entry) => ({
+      type: "client" as const,
+      key: clientKey(entry.client.slug),
+      client: entry.client,
+      stale: !entry.online,
+      children: [...entry.projects.values()]
+        .sort((a, b) => byName(a.project.name, b.project.name))
+        .map((node) => ({
+          ...node,
+          stale: !onlineProjects.has(projectRef(node.project)),
+          children: node.children.sort((a, b) => envOrder(a) - envOrder(b)),
+        })),
+    }));
+}
+
+/** Devices and the sessions on them that belong to no project. */
 export function networkTree(devices: readonly NetworkDevice[]): TreeNode[] {
   return devices.map((device) => {
     const stale = device.status !== "online";
@@ -394,7 +526,7 @@ export function networkTree(devices: readonly NetworkDevice[]): TreeNode[] {
       device,
       status: device.status,
       stale,
-      children: (device.tree?.sessions ?? []).map((session) => ({
+      children: (device.tree?.sessions ?? []).filter((session) => !session.project).map((session) => ({
         type: "session" as const,
         key: sessionKey(device.id, session.id),
         deviceId: device.id,
@@ -419,5 +551,9 @@ export class NetworkModel extends Emitter {
   }
   tree() {
     return networkTree(this.devices);
+  }
+  /** Clients → projects → environments for the current devices. */
+  projects() {
+    return projectTree(this.devices);
   }
 }

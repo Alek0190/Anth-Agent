@@ -3,6 +3,7 @@ import type {
   AgentDetail,
   AgentExtensions,
   AgentSummary,
+  ClientSummary,
   CompactionSettings,
   CreateAgentBody,
   CreateSessionBody,
@@ -13,9 +14,13 @@ import type {
   ForkBody,
   Frame,
   Page,
+  ProjectSummary,
   SendResult,
   SessionSummary,
   TaskOutcome,
+  UpdateSessionBody,
+  UpsertClientBody,
+  UpsertProjectBody,
   WhenBusy,
   WireEntry,
 } from "./api.js";
@@ -138,6 +143,28 @@ export class AnthClient {
     return this.stream(`/v1/events${docs.length ? `?docs=${docs.map(enc).join(",")}` : ""}`, signal);
   }
 
+  // ------------------------------------------------------------ clients and projects
+  /** Every client on this device. */
+  clients() {
+    return this.request<ClientSummary[]>("GET", "/v1/clients");
+  }
+  /** Create the client or rename it; safe to repeat. */
+  putClient(slug: string, body: UpsertClientBody) {
+    return this.request<ClientSummary>("PUT", `/v1/clients/${enc(slug)}`, body);
+  }
+  /** Every project on this device. */
+  projects() {
+    return this.request<ProjectSummary[]>("GET", "/v1/projects");
+  }
+  /** One project plus the ids of its sessions on this device. */
+  project(client: string, slug: string) {
+    return this.request<ProjectSummary & { sessions: string[] }>("GET", `/v1/projects/${enc(client)}/${enc(slug)}`);
+  }
+  /** Create the project (and its client when missing) or rename it; safe to repeat. */
+  putProject(client: string, slug: string, body: UpsertProjectBody) {
+    return this.request<ProjectSummary>("PUT", `/v1/projects/${enc(client)}/${enc(slug)}`, body);
+  }
+
   // ------------------------------------------------------------ sessions
   sessions() {
     return this.request<SessionSummary[]>("GET", "/v1/sessions");
@@ -166,6 +193,10 @@ export class SessionHandle {
   }
   rename(name: string) {
     return this.client.request<SessionSummary>("PATCH", this.base, { name });
+  }
+  /** Rename, move into a project (`<client>/<project>`), out of one (`project: null`), or change environment. */
+  update(body: UpdateSessionBody) {
+    return this.client.request<SessionSummary>("PATCH", this.base, body);
   }
   archive() {
     return this.client.request<{ archived: string }>("DELETE", this.base);

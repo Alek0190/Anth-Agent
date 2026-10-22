@@ -81,6 +81,59 @@ export interface DirListing {
   dirs: { name: string; path: string }[];
 }
 
+// ---------------------------------------------------------------- clients, projects, environments
+
+/** Where a project's sessions run. Approval rules (later phases) are decided by the environment. */
+export const ENVIRONMENTS = ["dev", "staging", "prod"] as const;
+export type EnvironmentName = (typeof ENVIRONMENTS)[number];
+
+/** An Anthward customer. `slug` is its id on every device: lowercase letters, digits and dashes. */
+export interface ClientSummary {
+  slug: string;
+  name: string;
+  createdAt: number;
+}
+
+/** One product for a client. Its ref is `<client>/<slug>`; the same ref on several devices is the same project. */
+export interface ProjectSummary {
+  client: string;
+  slug: string;
+  name: string;
+  createdAt: number;
+}
+
+export interface UpsertClientBody {
+  name: string;
+}
+
+export interface UpsertProjectBody {
+  name: string;
+  /** Names the client when this call creates it; ignored when the client already exists. */
+  clientName?: string;
+}
+
+/** PATCH /v1/sessions/:s. `project: null` moves the session out of its project. */
+export interface UpdateSessionBody {
+  name?: string;
+  project?: string | null;
+  env?: EnvironmentName;
+}
+
+const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
+/** True for a valid client or project id: lowercase letters, digits and inner dashes, at most 48 characters. */
+export const isSlug = (value: unknown): value is string => typeof value === "string" && SLUG.test(value);
+/** "Dental Co." → "dental-co". Empty when the name has no letters or digits. */
+export const slugify = (name: string) =>
+  name
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/, "");
+/** A project's network-wide id, `<client>/<project>`. */
+export const projectRef = (p: Pick<ProjectSummary, "client" | "slug">) => `${p.client}/${p.slug}`;
+
 // ---------------------------------------------------------------- sessions and agents
 
 export type AgentKind = "root" | "fork" | "subagent";
@@ -117,6 +170,10 @@ export interface SessionSummary {
   agents: AgentSummary[];
   /** Automatic compaction thresholds, shared by every agent of the session. */
   compaction?: CompactionSettings;
+  /** `<client>/<project>` when the session belongs to a project. */
+  project?: string;
+  /** Set whenever `project` is. */
+  env?: EnvironmentName;
 }
 
 /**
@@ -162,6 +219,9 @@ export interface DeviceTree {
   uid: string;
   name: string;
   sessions: SessionSummary[];
+  /** Absent from devices older than Anth-Agent phase 2. */
+  clients?: ClientSummary[];
+  projects?: ProjectSummary[];
   at: number;
 }
 
@@ -213,6 +273,10 @@ export interface CreateSessionBody {
   cwd: string;
   model: { provider: string; modelId: string };
   thinkingLevel?: ThinkingLevel;
+  /** `<client>/<project>`; the project must exist on this device (PUT /v1/projects/:client/:project). */
+  project?: string;
+  /** Defaults to `dev` when `project` is set; only valid with `project`. */
+  env?: EnvironmentName;
 }
 
 export interface CreateAgentBody {

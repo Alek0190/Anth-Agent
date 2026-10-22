@@ -52,7 +52,9 @@ export function useNetwork(stream: HubStream) {
   stream.onNetwork((devices) => model.apply({ type: "network", devices }));
   const devices = computed(() => (version.value, model.devices));
   const tree = computed(() => (version.value, model.tree()));
-  return { model, devices, tree };
+  /** Clients → projects → environments, merged across every device. */
+  const projects = computed(() => (version.value, model.projects()));
+  return { model, devices, tree, projects };
 }
 
 export function useDevice(stream: HubStream, deviceId: Ref<string | undefined>) {

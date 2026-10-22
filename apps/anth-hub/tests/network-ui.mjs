@@ -234,25 +234,40 @@ try {
   await page.getByLabel("Thinking level").selectOption("minimal");
   await expect(page.locator(".toast")).toContainText("Thinking minimal");
   await tab("Tools");
-  await expect(page.locator(".tool-row").filter({ has: page.locator("summary strong", { hasText: /^bash$/ }) })).toBeVisible();
+  await expect(
+    page
+      .locator(".tool-row")
+      .filter({ has: page.locator("summary strong", { hasText: /^bash$/ }) }),
+  ).toBeVisible();
   await page.locator(".tool-row summary").filter({ hasText: "start_session" }).click();
   await expect(page.getByLabel("start_session TypeScript definition")).toContainText(
     "function start_session(args: {",
   );
-  await expect(page.getByLabel("start_session TypeScript definition")).toContainText("model?: string;");
+  await expect(page.getByLabel("start_session TypeScript definition")).toContainText(
+    "model?: string;",
+  );
   pass("model and thinking level saved; tool signatures render");
 
   // Read only: the tools that write fade out as disabled and leave the agent's requests.
-  const toolRow = (name) => page.locator(".tool-row").filter({ has: page.locator("summary strong", { hasText: new RegExp(`^${name}$`) }) });
+  const toolRow = (name) =>
+    page
+      .locator(".tool-row")
+      .filter({ has: page.locator("summary strong", { hasText: new RegExp(`^${name}$`) }) });
   await page.getByRole("switch", { name: "Read only" }).click();
-  await expect(page.getByRole("switch", { name: "Read only" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("switch", { name: "Read only" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   await expect(toolRow("bash")).toHaveClass(/disabled/);
   await expect(toolRow("bash")).toContainText("disabled");
   await expect(toolRow("read")).not.toHaveClass(/disabled/);
   await send("!pwd");
   await expect(chat()).toContainText("Tool bash is not available", { timeout: 15000 });
   await page.getByRole("switch", { name: "Read only" }).click();
-  await expect(page.getByRole("switch", { name: "Read only" })).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("switch", { name: "Read only" })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
   await expect(toolRow("bash")).not.toHaveClass(/disabled/);
   pass("read only disables the tools that write, then restores them");
 
@@ -269,18 +284,30 @@ try {
   await expect(jevSwitch).toHaveAttribute("aria-checked", "false");
   await page.getByRole("switch", { name: "System prompts" }).click();
   await jevSwitch.click();
-  await expect(page.getByRole("switch", { name: "System prompts" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("switch", { name: "System prompts" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   await expect(jevSwitch).toHaveAttribute("aria-checked", "true");
   await jevSwitch.click();
   await page.getByRole("checkbox", { name: "one_sentence.md" }).check();
   await page.reload();
   await tab("Extend");
-  await expect(page.getByRole("switch", { name: "System prompts" })).toHaveAttribute("aria-checked", "true", { timeout: 10000 });
+  await expect(page.getByRole("switch", { name: "System prompts" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+    { timeout: 10000 },
+  );
   await expect(page.getByRole("checkbox", { name: "one_sentence.md" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "smart_ass_opus_fix.md" })).toBeChecked();
   await page.getByRole("switch", { name: "System prompts" }).click();
-  await expect(page.getByRole("switch", { name: "System prompts" })).toHaveAttribute("aria-checked", "false");
-  pass("extensions: jev-damage-control blocks rm -rf while on; both stack; the prompt checklist persists");
+  await expect(page.getByRole("switch", { name: "System prompts" })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  pass(
+    "extensions: jev-damage-control blocks rm -rf while on; both stack; the prompt checklist persists",
+  );
 
   // App State: live controls and the JSON editor with its revision guard.
   await tab("State");
@@ -315,17 +342,23 @@ try {
   const snapshot = chat().locator(".job-run").filter({ hasText: "Workspace snapshot" }).first();
   await expect(snapshot).toContainText("Completed", { timeout: 20000 });
   await expect(snapshot.locator(".job-stepper .ph-done")).toHaveCount(4);
-  await expect(snapshot.locator(".job-steps code").filter({ hasText: "git status --short" })).toHaveCount(1);
+  await expect(
+    snapshot.locator(".job-steps code").filter({ hasText: "git status --short" }),
+  ).toHaveCount(1);
   await page.getByRole("button", { name: "Run Change watch" }).click();
   const watching = chat().locator(".job-run").filter({ hasText: "Change watch" }).first();
-  await expect(watching.locator(".job-stepper .ph-running")).toContainText("Watch", { timeout: 15000 });
+  await expect(watching.locator(".job-stepper .ph-running")).toContainText("Watch", {
+    timeout: 15000,
+  });
   await expect(page.locator(".task-row").filter({ hasText: "Change watch #1" })).toBeVisible();
   await watching.getByRole("button", { name: "Stop" }).click();
   await expect(watching).toContainText("Stopped", { timeout: 15000 });
   await page.getByRole("button", { name: "Run Release check" }).click();
   const release = chat().locator(".job-run").filter({ hasText: "Release check" }).first();
   await expect(release.getByRole("button", { name: /Approve/ })).toBeVisible({ timeout: 30000 });
-  await expect(release.locator(".job-steps .k-tool code").filter({ hasText: "bash" })).toHaveCount(1);
+  await expect(release.locator(".job-steps .k-tool code").filter({ hasText: "bash" })).toHaveCount(
+    1,
+  );
   await page.reload();
   await release.getByRole("button", { name: /Approve/ }).click();
   await expect(release).toContainText("Completed", { timeout: 20000 });
@@ -335,7 +368,9 @@ try {
   await expect(byAgent).toContainText("run #2");
   await tab("Tasks");
   await page.getByRole("button", { name: "Run Change watch" }).click();
-  await expect(page.locator(".task-row").filter({ hasText: "Change watch #2" })).toBeVisible({ timeout: 10000 });
+  await expect(page.locator(".task-row").filter({ hasText: "Change watch #2" })).toBeVisible({
+    timeout: 10000,
+  });
   await page.getByRole("button", { name: "Stop all" }).click();
   await expect(page.locator(".task-row")).toHaveCount(0, { timeout: 15000 });
   await page.locator("summary").filter({ hasText: "Runtime details" }).click();
@@ -346,7 +381,9 @@ try {
       .filter({ hasText: /#\d+/ })
       .first(),
   ).toBeVisible({ timeout: 10000 });
-  pass("durable jobs: run cards with phases and steps, stop, approval across reload, agent run, task tree, stop all");
+  pass(
+    "durable jobs: run cards with phases and steps, stop, approval across reload, agent run, task tree, stop all",
+  );
 
   // Context bar: the auto-compaction marker moves with the keyboard and the session keeps it.
   await tab("Session");
@@ -356,11 +393,9 @@ try {
   await page.keyboard.press("ArrowLeft");
   await expect(autoMarker).toContainText("Auto-compact at 77.8k");
   await page.reload();
-  await expect(page.getByRole("slider", { name: "Automatic compaction starts at" })).toHaveAttribute(
-    "aria-valuenow",
-    "77824",
-    { timeout: 10000 },
-  );
+  await expect(
+    page.getByRole("slider", { name: "Automatic compaction starts at" }),
+  ).toHaveAttribute("aria-valuenow", "77824", { timeout: 10000 });
   await page.getByRole("button", { name: "Details" }).click();
   const details = page.getByRole("dialog", { name: "Context compaction" });
   await expect(details.getByRole("checkbox", { name: "Automatic compaction" })).toBeChecked();
@@ -507,6 +542,63 @@ try {
     timeout: 10000,
   });
   pass("archive session");
+
+  // Clients → projects → environments: a new client and project, its first session, a move to prod, and a second
+  // device joining the same project in staging.
+  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.getByLabel("Client", { exact: true }).selectOption("__new");
+  await page.getByLabel("Client name").fill("Dental Co");
+  await page.getByLabel("Project name").fill("Booking site");
+  await page.getByLabel("Register on device").selectOption("box-b");
+  await expect(page.locator(".session-modal")).toContainText("dental-co/booking-site");
+  await page.getByRole("button", { name: "Create project", exact: true }).click();
+  // The new-session dialog opens with the project and dev already chosen.
+  await expect(page.getByLabel("Project", { exact: true })).toHaveValue("dental-co/booking-site");
+  await expect(page.getByLabel("Environment", { exact: true })).toHaveValue("dev");
+  await expect(page.getByLabel("Device", { exact: true })).toHaveValue("box-b");
+  await page.getByLabel("Session name").fill("Booking build");
+  await page.getByRole("option", { name: "project-alpha" }).click();
+  await page.getByRole("button", { name: "Create session", exact: true }).click();
+  await expect(row("c/dental-co")).toContainText("Dental Co");
+  await expect(row("c/dental-co/p/booking-site")).toContainText("Booking site");
+  await expect(row("c/dental-co/p/booking-site/e/dev")).toBeVisible();
+  const booking = page.locator(".tree-row.session").filter({ hasText: "Booking build" });
+  await expect(booking).toContainText("box-b");
+  await expect(page.locator(".device-chip")).toHaveText("box-b");
+  pass("new client and project, first session lands in dev with its device badge");
+
+  await booking.hover();
+  await booking.getByRole("button", { name: /Move session .* to a project/ }).click();
+  await page.getByLabel("Environment", { exact: true }).selectOption("prod");
+  await page.getByRole("button", { name: "Move session", exact: true }).click();
+  await expect(row("c/dental-co/p/booking-site/e/prod")).toBeVisible({ timeout: 10000 });
+  await expect(row("c/dental-co/p/booking-site/e/dev")).toHaveCount(0);
+  await expect(
+    page.locator(".tree-row.session").filter({ hasText: "Booking build" }),
+  ).toBeVisible();
+  pass("move a session to prod");
+
+  const project = row("c/dental-co/p/booking-site");
+  await project.hover();
+  await project.getByRole("button", { name: "New session in Booking site" }).click();
+  await page.getByLabel("Device", { exact: true }).selectOption("box-a");
+  await page.getByLabel("Environment", { exact: true }).selectOption("staging");
+  await page.getByLabel("Session name").fill("Booking staging");
+  await page.getByRole("option", { name: "project-alpha" }).click();
+  await page.getByRole("button", { name: "Create session", exact: true }).click();
+  const staging = row("c/dental-co/p/booking-site/e/staging");
+  await expect(staging).toBeVisible({ timeout: 10000 });
+  await expect(
+    page.locator(".tree-row.session").filter({ hasText: "Booking staging" }),
+  ).toContainText("box-a");
+  await expect(row("c/dental-co")).toContainText("1 project");
+  await expect(project).toContainText("2 sessions");
+  // Project sessions leave the device sections.
+  await expect(
+    page.locator(".tree-row.session").filter({ hasText: "Booking staging" }),
+  ).toHaveCount(1);
+  await page.screenshot({ path: "/tmp/anth-net-projects.png" });
+  pass("a second device joins the same project in staging");
 
   expect(errors).toEqual([]);
   pass("no browser runtime errors");

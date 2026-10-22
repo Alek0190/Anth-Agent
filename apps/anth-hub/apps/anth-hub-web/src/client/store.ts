@@ -1,9 +1,17 @@
 // App-wide state: one hub stream, the network, the selected agent and its session/device feeds,
 // plus the command helpers every component shares.
 import { computed, reactive, ref, shallowRef, watch } from "vue";
-import type { AgentDetail, ModelInfo, NetworkDevice, TaskNode } from "@sdk/api";
+import type {
+  AgentDetail,
+  ClientSummary,
+  EnvironmentName,
+  ModelInfo,
+  NetworkDevice,
+  ProjectSummary,
+  TaskNode,
+} from "@sdk/api";
 import { sumUsage } from "@sdk/transcript";
-import { lineage } from "@sdk/models";
+import { lineage, placementKeys } from "@sdk/models";
 import { HubStream } from "./stream";
 import { deviceClient, hub, message } from "./hub";
 import { useAgent, useDevice, useNetwork, useSession, type AgentTarget } from "./composables";
@@ -13,6 +21,28 @@ export const streamState = ref(stream.state);
 stream.onState((s) => (streamState.value = s));
 export const network = useNetwork(stream);
 export const configFile = ref<string>();
+
+/** Every client and project any device knows, merged by id (the first device's names win). */
+export const knownClients = computed<ClientSummary[]>(() =>
+  network.projects.value.flatMap((n) => (n.type === "client" ? [n.client] : [])),
+);
+export const knownProjects = computed(() =>
+  network.projects.value.flatMap((c) =>
+    c.type === "client"
+      ? c.children.flatMap((p) =>
+          p.type === "project"
+            ? [
+                {
+                  ref: `${p.project.client}/${p.project.slug}`,
+                  project: p.project as ProjectSummary,
+                  client: c.client,
+                },
+              ]
+            : [],
+        )
+      : [],
+  ),
+);
 
 // ------------------------------------------------------------------ selection + persisted UI state
 
@@ -61,11 +91,13 @@ let pendingReveal = false;
 function reveal() {
   const t = selected.value;
   if (!pendingReveal || !t) return;
-  const agents = network.devices.value
+  const summary = network.devices.value
     .find((d) => d.id === t.deviceId)
-    ?.tree?.sessions.find((s) => s.id === t.sessionId)?.agents;
+    ?.tree?.sessions.find((s) => s.id === t.sessionId);
+  const agents = summary?.agents;
   const byId = new Map((agents ?? []).map((a) => [a.id, a]));
   const keys = [
+    ...(summary?.project ? placementKeys(summary.project, summary.env ?? "dev") : []),
     t.deviceId,
     `${t.deviceId}/s/${t.sessionId}`,
     `${t.deviceId}/s/${t.sessionId}/a/${t.agentId}`,
@@ -246,7 +278,9 @@ export const ui = reactive({
 });
 
 export type Dialog =
-  | { kind: "new-session"; deviceId?: string }
+  | { kind: "new-session"; deviceId?: string; project?: string; env?: EnvironmentName }
+  | { kind: "new-project"; client?: string }
+  | { kind: "assign"; deviceId: string; sessionId: string }
   | { kind: "models" }
   | { kind: "help" }
   | { kind: "path"; path: string }
@@ -362,4 +396,17 @@ export function panelHotkey(e: KeyboardEvent): "tree" | "inspector" | undefined 
   if (!held || e.repeat || e.isComposing) return;
   if (e.code === "KeyN") return "tree";
   if (e.code === "KeyT") return "inspector";
+}
+
+/**
+ * Make sure a project known anywhere in the network is registered on this device (an idempotent PUT), so a session
+ * there can join it. This is how one project gets a dev environment on the laptop and prod on a VM.
+ */
+export async function ensureProject(deviceId: string, ref: string) {
+  const known = knownProjects.value.find((p) => p.ref === ref);
+  const [client, slug] = ref.split("/");
+  await deviceClient(deviceId).putProject(client, slug, {
+    name: known?.project.name ?? slug,
+    clientName: known?.client.name ?? client,
+  });
 }

@@ -158,6 +158,47 @@
 .tree-empty {
   padding: 12px 10px;
 }
+.tree-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 6px 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 1.4px;
+  font-weight: 650;
+}
+.tree-section .icon-button {
+  width: 26px;
+  height: 26px;
+}
+.tree-section .icon-button:disabled {
+  opacity: 0.35;
+}
+.tree-row.client .name,
+.tree-row.project .name {
+  font-weight: 600;
+}
+.env-badge {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  border: 1px solid #443738;
+  color: #e9e2e2;
+}
+.env-badge.dev {
+  border-color: #3f5f4b;
+  color: #9fe0b5;
+}
+.env-badge.staging {
+  border-color: #6a5a32;
+  color: #f2d48a;
+}
+.env-badge.prod {
+  border-color: #7a3d43;
+  color: #ff9aa4;
+}
 .tree-row {
   --depth: 0;
   position: relative;

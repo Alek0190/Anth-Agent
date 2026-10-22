@@ -18,6 +18,8 @@ import AgentView from "./components/AgentView.vue";
 import Inspector from "./components/Inspector.vue";
 import OfflinePanel from "./components/OfflinePanel.vue";
 import NewSessionDialog from "./components/NewSessionDialog.vue";
+import NewProjectDialog from "./components/NewProjectDialog.vue";
+import AssignDialog from "./components/AssignDialog.vue";
 import PromptDialog from "./components/PromptDialog.vue";
 import ModelPicker from "./components/ModelPicker.vue";
 import {
@@ -204,7 +206,21 @@ onBeforeUnmount(() => {
 
     <NewSessionDialog
       v-if="ui.dialog?.kind === 'new-session'"
+      :key="`${ui.dialog.project ?? ''}/${ui.dialog.env ?? ''}`"
       :device-id="ui.dialog.deviceId"
+      :project="ui.dialog.project"
+      :env="ui.dialog.env"
+      @close="ui.dialog = undefined"
+    />
+    <NewProjectDialog
+      v-else-if="ui.dialog?.kind === 'new-project'"
+      :client="ui.dialog.client"
+      @close="ui.dialog = undefined"
+    />
+    <AssignDialog
+      v-else-if="ui.dialog?.kind === 'assign'"
+      :device-id="ui.dialog.deviceId"
+      :session-id="ui.dialog.sessionId"
       @close="ui.dialog = undefined"
     />
     <PromptDialog
@@ -259,8 +275,8 @@ onBeforeUnmount(() => {
             <div>
               <strong>Pick a device, start a session</strong>
               <p>
-                Every device in the tree runs anth-backend. A session gets its own SQLite database on
-                that device, in the directory you choose.
+                Every device in the tree runs anth-backend. A session gets its own SQLite database
+                on that device, in the directory you choose.
               </p>
             </div>
           </li>

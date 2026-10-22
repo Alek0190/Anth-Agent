@@ -68,11 +68,26 @@ export function v1(store: Store) {
     }),
   );
 
+  // ---------------------------------------------------------- clients and projects
+  // PUT upserts by id, so a retried call is harmless; the same project ref on several devices is one project.
+  r.get("/clients", (_req, res) => res.json(store.clients()));
+  r.put("/clients/:client", (req, res) => res.json(store.upsertClient(param(req, "client"), req.body ?? {})));
+  r.get("/projects", (_req, res) => res.json(store.projects()));
+  r.get("/projects/:client/:project", (req, res) =>
+    res.json({
+      ...store.project(param(req, "client"), param(req, "project")),
+      sessions: store.list().filter((row) => row.project === `${param(req, "client")}/${param(req, "project")}`).map((row) => row.id),
+    }),
+  );
+  r.put("/projects/:client/:project", (req, res) =>
+    res.json(store.upsertProject(param(req, "client"), param(req, "project"), req.body ?? {})),
+  );
+
   // ---------------------------------------------------------- sessions
   r.get("/sessions", route(async (_req, res) => res.json((await store.tree()).sessions)));
   r.post("/sessions", create, route(async (req, res) => res.status(201).json(await store.create(req.body ?? {}))));
   r.get("/sessions/:s", route(async (_req, res) => res.json(await store.sessionSummary(L(res).row))));
-  r.patch("/sessions/:s", route(async (req, res) => res.json(await store.rename(L(res).row, req.body?.name))));
+  r.patch("/sessions/:s", route(async (req, res) => res.json(await store.updateSession(L(res).row, req.body ?? {}))));
   r.get("/sessions/:s/compaction", route(async (_req, res) => res.json(store.compactionOf(L(res).row.id))));
   r.patch("/sessions/:s/compaction", route(async (req, res) => res.json(store.setCompaction(L(res).row, req.body ?? {}))));
   r.delete("/sessions/:s", route(async (_req, res) => res.json(await store.archive(L(res).row))));
