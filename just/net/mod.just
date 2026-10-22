@@ -1,9 +1,9 @@
-# Durable Agent Network devices. Every recipe takes an id from dpi-network.yaml,
+# Durable Agent Network devices. Every recipe takes an id from anth-network.yaml,
 # then runs the driver for that device's kind (local, ssh, exe-dev, url).
 
 set shell := ["zsh", "-cu"]
 set positional-arguments
-set working-directory := "../../apps/dpi-sdk"
+set working-directory := "../../apps/anth-sdk"
 
 net := "NODE_NO_WARNINGS=1 npx tsx scripts/net.ts"
 
@@ -16,7 +16,7 @@ default:
 status *DEVICE:
     {{ net }} status "$@"
 
-# Print device ids from dpi-network.yaml
+# Print device ids from anth-network.yaml
 ids:
     @{{ net }} ids
 

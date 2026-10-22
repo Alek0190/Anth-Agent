@@ -1,32 +1,32 @@
 ---
-description: Install Durable Pi: prerequisites, .env, app dependencies, the web UI build, this machine's device config and the optional proactive demo
+description: Install Anth-Agent: prerequisites, .env, app dependencies, the web UI build, this machine's device config and the optional proactive demo
 ---
 
-# Install Durable Pi (Durable Agent Network)
+# Install Anth-Agent (Durable Agent Network)
 
 ## Purpose
 
-Set up this checkout so this machine can run a `dpi-backend` device, the web hub and the terminal client. Check prerequisites, confirm the OpenRouter key, install the four network apps, build the web UI, write this machine's device config, and verify with the test suite. This is an interactive, agentic process: ask the user when a choice is needed.
+Set up this checkout so this machine can run a `anth-backend` device, the web hub and the terminal client. Check prerequisites, confirm the OpenRouter key, install the four network apps, build the web UI, write this machine's device config, and verify with the test suite. This is an interactive, agentic process: ask the user when a choice is needed.
 
 ## Variables
 
 SOURCE_REPO: the directory this command runs from (the repo root, where `justfile` lives)
-NETWORK_FILE: `dpi-network.yaml` (gitignored device declarations; template `dpi-network.example.yaml`; every `just net` recipe takes an id from it)
+NETWORK_FILE: `anth-network.yaml` (gitignored device declarations; template `anth-network.example.yaml`; every `just net` recipe takes an id from it)
 ENV_FILE: `.env` at the repo root (template: `.env.example`)
-DEVICE_HOME: `~/.dpi` (`backend.env` with the device token, `backend/` data, `network.sqlite` hub registry)
-APPS: `apps/dpi-sdk`, `apps/dpi-backend`, `apps/dpi-playground`, `apps/dpi-tui`
+DEVICE_HOME: `~/.anth` (`backend.env` with the device token, `backend/` data, `network.sqlite` hub registry)
+APPS: `apps/anth-sdk`, `apps/anth-backend`, `apps/anth-hub`, `apps/anth-tui`
 
 ## Codebase Structure
 
 ```text
 justfile                 # groups: net, backend, hub, tui, test, proactive (just/<group>/mod.just)
-dpi-network.example.yaml # template: defaults + the local device, commented ssh and exe-dev examples
+anth-network.example.yaml # template: defaults + the local device, commented ssh and exe-dev examples
 .env.example             # OPENROUTER_API_KEY (copied into each device's backend.env), optional TypeSafe and ElevenLabs settings
-apps/dpi-sdk/            # contract, client, models, registry, ops drivers (scripts/net.ts)
-apps/dpi-backend/        # the device server (port 4780)
-apps/dpi-playground/     # hub + Vue web UI (port 4781)
-apps/dpi-tui/            # terminal client
-apps/proactive-dpi-demo/ # the hook: proactive incident agent (just proactive install, reset, build)
+apps/anth-sdk/            # contract, client, models, registry, ops drivers (scripts/net.ts)
+apps/anth-backend/        # the device server (port 4780)
+apps/anth-hub/     # hub + Vue web UI (port 4781)
+apps/anth-tui/            # terminal client
+apps/proactive-demo/ # the hook: proactive incident agent (just proactive install, reset, build)
 ```
 
 ## Instructions
@@ -62,7 +62,7 @@ Optional, so report them and continue:
 
 1. If `.env` is missing, copy the template: `cp .env.example .env`, then ask the user to paste their OpenRouter key into `.env` (https://openrouter.ai/keys). Do not ask for the key in chat.
 2. Confirm the key is set without printing it: `grep -Eq '^OPENROUTER_API_KEY=sk-' .env && echo set || ([ -n "$OPENROUTER_API_KEY" ] && echo "set in environment") || echo missing`.
-3. If it is missing and the user wants to continue without a key, tell them the backend can run with the free deterministic model: `DPI_PROVIDER=faux just backend run`.
+3. If it is missing and the user wants to continue without a key, tell them the backend can run with the free deterministic model: `ANTH_PROVIDER=faux just backend run`.
 4. Optional, for the proactive demo's voice line: `grep -Eq '^ELEVENLABS_API_KEY=.+' .env && echo set || echo "not set (the demo runs, the voice line is skipped)"`. The line plays through `afplay` on macOS and in the browser elsewhere; `ELEVENLABS_VOICE_ID` picks another voice from the user's ElevenLabs account.
 
 ### Step 3 — Install Dependencies
@@ -72,11 +72,11 @@ Optional, so report them and continue:
 
 ### Step 4 — Verify Configuration
 
-1. If `dpi-network.yaml` is missing, create it: `cp dpi-network.example.yaml dpi-network.yaml`. Never overwrite an existing one.
+1. If `anth-network.yaml` is missing, create it: `cp anth-network.example.yaml anth-network.yaml`. Never overwrite an existing one.
 2. `just net ids`: the file parses and lists device ids. Confirm `local` is among them.
-3. `just net up local`: writes `~/.dpi/backend.env` with a fresh `DPI_TOKEN` (or keeps an existing one), copies `OPENROUTER_API_KEY` from `.env`, and registers the device in `~/.dpi/network.sqlite`. Then confirm `test -f ~/.dpi/backend.env && stat -f '%Lp' ~/.dpi/backend.env` (Linux: `stat -c '%a'`) shows `600`. Never print the file.
+3. `just net up local`: writes `~/.anth/backend.env` with a fresh `ANTH_TOKEN` (or keeps an existing one), copies `OPENROUTER_API_KEY` from `.env`, and registers the device in `~/.anth/network.sqlite`. Then confirm `test -f ~/.anth/backend.env && stat -f '%Lp' ~/.anth/backend.env` (Linux: `stat -c '%a'`) shows `600`. Never print the file.
 4. `just hub build`: type-checks and builds the web UI that `just hub start` serves.
-5. Tell the user that new sessions start in `~/dpi-work` (created by `just net up local`) unless they set `start_dirs`, that any existing folder on the device works as a session cwd, and that remote machines are added by uncommenting the `ssh` or `exe-dev` example in `dpi-network.yaml` and running `just net up <id>`.
+5. Tell the user that new sessions start in `~/anth-work` (created by `just net up local`) unless they set `start_dirs`, that any existing folder on the device works as a session cwd, and that remote machines are added by uncommenting the `ssh` or `exe-dev` example in `anth-network.yaml` and running `just net up <id>`.
 
 ### Step 5 — Verify Readiness
 
@@ -94,7 +94,7 @@ Next steps, in order (each in its own terminal):
 just backend run              # this machine's device server on :4780
 just hub start                # web UI: http://localhost:4781
 just tui attach local         # terminal client on the same device
-just net status               # probe every device in dpi-network.yaml
-just net up <id>              # after uncommenting an ssh or exe-dev example in dpi-network.yaml
+just net status               # probe every device in anth-network.yaml
+just net up <id>              # after uncommenting an ssh or exe-dev example in anth-network.yaml
 just proactive take           # the proactive demo: prints the URL; the agent asks to deploy within about 30s
 ```

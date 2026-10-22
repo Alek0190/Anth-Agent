@@ -1,15 +1,25 @@
-# Durable Pi: The Durable Agent Network
+# Anth-Agent
 
-> **Proactive agents start working before you sit down. They don't wait for you to work. They work for you, then wait.**
-> Durable pi agents on any machine you own, driven from a web UI, a terminal or one curl.
+> **Anthward's durable agent team.** Agents build client products, ship them, watch them live and fix them, on your laptop, your cloud and throwaway sandboxes, and they stop for your approval before anything risky.
 
-📺 Watch this video to get the full breakdown of this codebase: **[Pi Durable PROACTIVE Agents](https://youtu.be/DNDYYHsypZg)**
+Anth-Agent is a fork of [disler/durable-pi](https://github.com/disler/durable-pi) (MIT), built on [pi-durable](https://earendil.com/posts/pi-durable/) from the team behind the [Pi coding agent](https://github.com/earendil-works/pi). Every device runs `anth-backend`, which owns its agents, their SQLite databases and their tools. Clients connect with a **URL and a bearer token**: the web hub, `anth-tui` in the terminal, or one `curl`. **The agent lives on the device, not in the client.** Close the browser, quit the terminal or restart the machine mid-tool, and the run picks up from its last checkpoint.
+
+**Plan:** [`docs/ANTH-AGENT-PLAN.md`](docs/ANTH-AGENT-PLAN.md) has the architecture and the seven-phase roadmap. This commit is Phase 1 (fork and rename).
+
+| Upstream name | Anth-Agent name |
+|---|---|
+| `apps/dpi-backend` | `apps/anth-backend` |
+| `apps/dpi-playground` (hub + web) | `apps/anth-hub` (`anth-hub-server`, `anth-hub-web`) |
+| `apps/dpi-tui` | `apps/anth-tui` |
+| `apps/dpi-sdk` | `apps/anth-sdk` |
+| `apps/proactive-dpi-demo` | `apps/proactive-demo` |
+| `dpi-network.yaml`, `~/.dpi`, `DPI_*` env | `anth-network.yaml`, `~/.anth`, `ANTH_*` env |
+
+The rest of this README is the upstream guide with names updated. The diagrams in `images/` still show the upstream names.
 
 <p align="center">
-  <img src="images/01_durable_agent_network.svg" alt="Three clients (web UI, dpi-tui, curl) reach durable agents on four devices; the clients disconnect and every device keeps checkpointing its run to SQLite" width="850">
+  <img src="images/01_durable_agent_network.svg" alt="Three clients (web UI, anth-tui, curl) reach durable agents on four devices; the clients disconnect and every device keeps checkpointing its run to SQLite" width="850">
 </p>
-
-[Pi Durable](https://earendil.com/posts/pi-durable/), from the team behind the [Pi coding agent](https://github.com/earendil-works/pi), persists ongoing work, conversations and application state through failures, through clients and through change itself. This repo puts it to work. Every device runs a small server, `dpi-backend`, that owns its agents, their SQLite databases and their tools. Clients connect with a **URL and a bearer token**: a web hub that watches every device at once, `dpi-tui` in the terminal, or one `curl` that sends work and waits for the answer. **The agent lives on the device, not in the client.** Close the browser, quit the terminal or restart the machine mid-tool, and the run picks up from its last checkpoint.
 
 ---
 
@@ -31,9 +41,9 @@ The command lives in [`.claude/commands/install.md`](.claude/commands/install.md
 
 ```bash
 cp .env.example .env                           # set OPENROUTER_API_KEY; copied into each device's backend.env, never sent to clients
-cp dpi-network.example.yaml dpi-network.yaml   # your devices; starts with only `local`
-just install                                   # npm install for dpi-sdk, dpi-backend, dpi-playground and dpi-tui
-just net up local                              # write ~/.dpi/backend.env with a fresh token and register this machine
+cp anth-network.example.yaml anth-network.yaml   # your devices; starts with only `local`
+just install                                   # npm install for anth-sdk, anth-backend, anth-hub and anth-tui
+just net up local                              # write ~/.anth/backend.env with a fresh token and register this machine
 just hub build                                 # build the web UI the hub serves (once, and after UI changes)
 just backend run                               # this machine's device server on :4780
 just hub start                                 # web UI on http://localhost:4781 (second terminal)
@@ -66,7 +76,7 @@ Replay-safe tools rerun after a crash. A tool that may have partially run, like 
   <img src="images/04_fix_ready_before_you_arrive.svg" alt="Timeline: a bad deploy at T+5 s, the incident agent detects, investigates, finds the root cause, fixes and is ready for review by T+25 s, then waits for your deploy approval at T+30 s" width="800">
 </p>
 
-A durable agent doesn't have to wait for your prompt. [`apps/proactive-dpi-demo`](apps/proactive-dpi-demo) watches a mock production log stream: Google Cloud Run entries for an online store. When guest checkouts start failing, code opens an incident and starts a durable agent on its own. By the time you show up, the agent has sized the impact from the logs, found the commit that broke checkout, written the fix and a regression test, and proved the test fails on `main` and passes on its branch. **Then it waits for you to approve the deploy.** It doesn't wait for you to work. It works for you, then waits.
+A durable agent doesn't have to wait for your prompt. [`apps/proactive-demo`](apps/proactive-demo) watches a mock production log stream: Google Cloud Run entries for an online store. When guest checkouts start failing, code opens an incident and starts a durable agent on its own. By the time you show up, the agent has sized the impact from the logs, found the commit that broke checkout, written the fix and a regression test, and proved the test fails on `main` and passes on its branch. **Then it waits for you to approve the deploy.** It doesn't wait for you to work. It works for you, then waits.
 
 <p align="center">
   <img src="images/05_judge_every_row.svg" alt="Jev labels every log row normal, suspicious or incident; code counts three incident verdicts with one fingerprint within 120 seconds; the incident agent works every stage and waits for approval" width="800">
@@ -97,34 +107,34 @@ just proactive bug    # deploy the bad commit now instead
 just proactive stop   # end the demo
 ```
 
-The playbook, tools, hooks, Jev questions, thresholds and model are all yours to change. The timeline, flags and recovery checks are in [`apps/proactive-dpi-demo/README.md`](apps/proactive-dpi-demo/README.md).
+The playbook, tools, hooks, Jev questions, thresholds and model are all yours to change. The timeline, flags and recovery checks are in [`apps/proactive-demo/README.md`](apps/proactive-demo/README.md).
 
 ---
 
 ## The Durable Agent Network
 
 <p align="center">
-  <img src="images/07_one_api_every_client.svg" alt="The web UI, dpi-tui and curl all call /v1 with a bearer token on dpi-backend, which runs the agent and commits it to agent.sqlite" width="780">
+  <img src="images/07_one_api_every_client.svg" alt="The web UI, anth-tui and curl all call /v1 with a bearer token on anth-backend, which runs the agent and commits it to agent.sqlite" width="780">
 </p>
 
 | Piece | Where it runs | Owns |
 |---|---|---|
-| **`dpi-backend`** | every device, port 4780; a launchd or systemd service on remote machines | the harnesses, `~/.dpi/backend/catalog.sqlite`, one `sessions/<id>/agent.sqlite` per session, the device's shared App State, the bearer token in `~/.dpi/backend.env` |
-| **hub** (`apps/dpi-playground`) | your laptop, `127.0.0.1:4781` | the device registry and tokens in `~/.dpi/network.sqlite`, a token-injecting REST proxy, one multiplexed SSE stream per browser tab, the Vue client |
-| **`dpi-tui`** | any terminal | nothing: it reads a device's URL and token from the registry and talks to the device directly |
-| **`dpi-sdk`** | inside all of the above | the v1 wire contract, `DpiClient`, the SSE reader, the `AgentModel` and `SessionModel` reducers, transcript items, the registry and the ops drivers. See [`apps/dpi-sdk/README.md`](apps/dpi-sdk/README.md) |
+| **`anth-backend`** | every device, port 4780; a launchd or systemd service on remote machines | the harnesses, `~/.anth/backend/catalog.sqlite`, one `sessions/<id>/agent.sqlite` per session, the device's shared App State, the bearer token in `~/.anth/backend.env` |
+| **hub** (`apps/anth-hub`) | your laptop, `127.0.0.1:4781` | the device registry and tokens in `~/.anth/network.sqlite`, a token-injecting REST proxy, one multiplexed SSE stream per browser tab, the Vue client |
+| **`anth-tui`** | any terminal | nothing: it reads a device's URL and token from the registry and talks to the device directly |
+| **`anth-sdk`** | inside all of the above | the v1 wire contract, `AnthClient`, the SSE reader, the `AgentModel` and `SessionModel` reducers, transcript items, the registry and the ops drivers. See [`apps/anth-sdk/README.md`](apps/anth-sdk/README.md) |
 
 <p align="center">
   <img src="images/08_device_session_agent.svg" alt="A device holds sessions, each session is one harness and one agent.sqlite, and each session holds agents: Main, forks and subagents; the address mac-mini:api-refactor:fork names all three" width="780">
 </p>
 
-The network has three levels. A **device** runs one `dpi-backend`. A **session** is one pi-durable harness and one database in a working directory on that device. An **agent** is a conversation in that session: `Main`, a fork or a subagent. The [v1 API](apps/dpi-backend/API.md) lives at the device's URL and addresses sessions and agents by id or name (`/v1/sessions/release-notes/agents/main`). It streams the device, a session or an agent as `hello → snapshot → deltas`, and makes every send idempotent through a `requestId`. Streams never replay: a reconnect starts from a fresh snapshot, which is why a killed client loses nothing. The web client and the TUI feed the same frames into the same `AgentModel` and render the same transcript items. **One reducer, two renderers.**
+The network has three levels. A **device** runs one `anth-backend`. A **session** is one pi-durable harness and one database in a working directory on that device. An **agent** is a conversation in that session: `Main`, a fork or a subagent. The [v1 API](apps/anth-backend/API.md) lives at the device's URL and addresses sessions and agents by id or name (`/v1/sessions/release-notes/agents/main`). It streams the device, a session or an agent as `hello → snapshot → deltas`, and makes every send idempotent through a `requestId`. Streams never replay: a reconnect starts from a fresh snapshot, which is why a killed client loses nothing. The web client and the TUI feed the same frames into the same `AgentModel` and render the same transcript items. **One reducer, two renderers.**
 
 ---
 
 ## What a durable agent can do
 
-Every capability below is in the web client's inspector and in the [v1 API](apps/dpi-backend/API.md), and the agent can use most of them as tools. Every change applies from the agent's next request, and nothing restarts.
+Every capability below is in the web client's inspector and in the [v1 API](apps/anth-backend/API.md), and the agent can use most of them as tools. Every change applies from the agent's next request, and nothing restarts.
 
 ### Compaction in the background
 
@@ -164,7 +174,7 @@ Every model call and every tool call is its own durable task, so the agent's too
   <img src="images/13_hook_blocks_tool.svg" alt="A bash rm -rf call reaches the jev-damage-control beforeTool hook, which blocks it as irreversible and returns a blocked tool result to the agent" width="780">
 </p>
 
-pi-durable extensions bring your own tools, hooks, prompt sections and checkpointed tasks. The Extend tab turns two custom extensions on or off per agent. `system-prompts` is a checklist of built-in prompts, led by [`smart_ass_opus_fix.md`](apps/dpi-backend/prompts/smart_ass_opus_fix.md). `jev-damage-control` (off by default) sends every `bash` command to the Jev API before it runs and blocks destructive or irreversible ones in about 300 ms. Its verdict is a durable memo, so a restart never asks twice. If Jev is unreachable, the command runs.
+pi-durable extensions bring your own tools, hooks, prompt sections and checkpointed tasks. The Extend tab turns two custom extensions on or off per agent. `system-prompts` is a checklist of built-in prompts, led by [`smart_ass_opus_fix.md`](apps/anth-backend/prompts/smart_ass_opus_fix.md). `jev-damage-control` (off by default) sends every `bash` command to the Jev API before it runs and blocks destructive or irreversible ones in about 300 ms. Its verdict is a durable memo, so a restart never asks twice. If Jev is unreachable, the command runs.
 
 ### Fork at any entry
 
@@ -185,10 +195,10 @@ Fork any agent at any entry, from the transcript or with `/fork`. The fork copie
 The web client has three columns: the **network tree** (device → session → agent), the **inspector** and the **agent**. The inspector tabs are Session (model, thinking, context bar, usage), State, Tasks, Tools and Extend. The composer sends a follow-up, a steer (it joins after the current tool round) or a reject-if-busy, and `/` opens the slash commands. The browser never sees a token. It holds one SSE connection to the hub, and the hub opens the authenticated upstreams.
 
 <p align="center">
-  <img src="images/16_terminal_client.svg" alt="dpi-tui attached to vm-1:release-notes: the device, workspace and agent header, write and bash tool rows with results, and the model, context and cost footer" width="780">
+  <img src="images/16_terminal_client.svg" alt="anth-tui attached to vm-1:release-notes: the device, workspace and agent header, write and bash tool rows with results, and the model, context and cost footer" width="780">
 </p>
 
-`dpi-tui` is pi's look and keys over the network API. Enter sends or steers, Alt+Enter queues a follow-up, Esc interrupts, and Ctrl+C on an empty prompt exits with the command to reattach. **The agent keeps running.**
+`anth-tui` is pi's look and keys over the network API. Enter sends or steers, Alt+Enter queues a follow-up, Esc interrupts, and Ctrl+C on an empty prompt exits with the command to reattach. **The agent keeps running.**
 
 ```bash
 just tui attach <device>                     # pick or create a session on a device
@@ -205,17 +215,17 @@ curl -s "$URL/v1/sessions/oneshot/agents/main/messages" -H "Authorization: Beare
 # {"submissionId":10,"status":"done","answer":{"entryId":17,"text":"The directory is empty. ..."}}
 ```
 
-The [backend README](apps/dpi-backend/README.md#demo-runbook-hop-into-an-already-running-agent) has the full runbook: start work in the TUI, steer it from the web, close both clients, restart the device mid-tool, and fork the resumed run.
+The [backend README](apps/anth-backend/README.md#demo-runbook-hop-into-an-already-running-agent) has the full runbook: start work in the TUI, steer it from the web, close both clients, restart the device mid-tool, and fork the resumed run.
 
 ---
 
 ## Configure your network
 
 <p align="center">
-  <img src="images/17_devices_are_data.svg" alt="dpi-network.yaml lists local, mac-mini, linux-box and vm-1 by kind; just net up runs each kind's steps until every device is online" width="780">
+  <img src="images/17_devices_are_data.svg" alt="anth-network.yaml lists local, mac-mini, linux-box and vm-1 by kind; just net up runs each kind's steps until every device is online" width="780">
 </p>
 
-Devices are data. `dpi-network.yaml` declares each one by kind, and no code or recipe names a machine. It is gitignored; create it from [`dpi-network.example.yaml`](dpi-network.example.yaml), which declares only `local` and has commented `ssh` and `exe-dev` examples. Tokens never live in the YAML: each device generates its own, and `just net register <id>` copies it into the hub registry.
+Devices are data. `anth-network.yaml` declares each one by kind, and no code or recipe names a machine. It is gitignored; create it from [`anth-network.example.yaml`](anth-network.example.yaml), which declares only `local` and has commented `ssh` and `exe-dev` examples. Tokens never live in the YAML: each device generates its own, and `just net register <id>` copies it into the hub registry.
 
 | Kind | How it runs | `just net up <id>` does |
 |---|---|---|
@@ -234,7 +244,7 @@ just net rotate <id>     # new token on the device, then re-register
 just net destroy <id>    # exe-dev only; asks first; refuses VMs not in the YAML
 ```
 
-Every line of a device's `~/.dpi/backend.env` traces to the YAML: `DPI_PORT`, `DPI_HOST` and `DPI_START_DIRS` from `port`, `host` and `start_dirs`, secrets named in `env_keys` (values read from your `.env`), plain settings from `env`, the device id as `DPI_DEVICE_NAME`, and a `DPI_TOKEN` generated on the first `up`. New sessions start in `start_dirs` (default `~/dpi-work`, created if missing), and any existing folder on the device works as a session's working directory. The hub classifies each device as `online`, `checking`, `offline`, `unauthorized`, `mismatch` (the URL now answers with a different device identity) or `incompatible`. An offline device keeps its last tree, dimmed, with the exact terminal fix for its kind.
+Every line of a device's `~/.anth/backend.env` traces to the YAML: `ANTH_PORT`, `ANTH_HOST` and `ANTH_START_DIRS` from `port`, `host` and `start_dirs`, secrets named in `env_keys` (values read from your `.env`), plain settings from `env`, the device id as `ANTH_DEVICE_NAME`, and a `ANTH_TOKEN` generated on the first `up`. New sessions start in `start_dirs` (default `~/anth-work`, created if missing), and any existing folder on the device works as a session's working directory. The hub classifies each device as `online`, `checking`, `offline`, `unauthorized`, `mismatch` (the URL now answers with a different device identity) or `incompatible`. An offline device keeps its last tree, dimmed, with the exact terminal fix for its kind.
 
 ---
 
@@ -261,7 +271,7 @@ Start in two places. **Product agents:** a support chatbot on your site should b
 ## How it's built
 
 <p align="center">
-  <img src="images/19_sqlite_on_every_device.svg" alt="On every device dpi-backend keeps catalog.sqlite, app-state.sqlite and one agent.sqlite per session; the hub keeps only network.sqlite with device URLs and tokens" width="780">
+  <img src="images/19_sqlite_on_every_device.svg" alt="On every device anth-backend keeps catalog.sqlite, app-state.sqlite and one agent.sqlite per session; the hub keeps only network.sqlite with device URLs and tokens" width="780">
 </p>
 
 Each device owns its agents and their data in SQLite. The hub only stores how to reach them, so it can go away at any time.
@@ -270,23 +280,23 @@ Each device owns its agents and their data in SQLite. The hub only stores how to
 
 ```text
 durable-pi/
-├── dpi-network.example.yaml           # template for dpi-network.yaml (gitignored): devices, kinds, start_dirs
+├── anth-network.example.yaml           # template for anth-network.yaml (gitignored): devices, kinds, start_dirs
 ├── .env.example                       # OPENROUTER_API_KEY (+ ELEVENLABS_API_KEY for the demo voice)
 ├── justfile                           # install, check, and one module per work area
 ├── just/                              # net, backend, hub, tui, test, proactive (one mod.just each)
 ├── apps/
-│   ├── dpi-sdk/                       # contract, client, reducers, transcript; node/ = registry, YAML config, ops drivers
+│   ├── anth-sdk/                       # contract, client, reducers, transcript; node/ = registry, YAML config, ops drivers
 │   │   └── scripts/net.ts             # the ops CLI behind just net
-│   ├── dpi-backend/                   # the device server: REST v1, SSE streams, bearer auth, jobs, extensions
+│   ├── anth-backend/                   # the device server: REST v1, SSE streams, bearer auth, jobs, extensions
 │   │   ├── API.md                     # every route, stream and recipe
 │   │   ├── prompts/                   # built-in prompts for the system-prompts extension
 │   │   └── deploy/                    # launchd plist, systemd unit, backend.env.example
-│   ├── dpi-playground/                # the hub + web client
-│   │   ├── apps/dpi-playground-hub/   # YAML seed, device monitor, token proxy, stream mux, guard
-│   │   ├── apps/dpi-playground-fe/    # Vue 3: network tree, agent view, inspector tabs
+│   ├── anth-hub/                # the hub + web client
+│   │   ├── apps/anth-hub-server/   # YAML seed, device monitor, token proxy, stream mux, guard
+│   │   ├── apps/anth-hub-web/    # Vue 3: network tree, agent view, inspector tabs
 │   │   └── tests/                     # hub test, faux-device UI suite, per-device suites, e2e scenario
-│   ├── dpi-tui/                       # pi-like terminal client on @earendil-works/pi-tui
-│   └── proactive-dpi-demo/            # the hook: Jev log watcher, incident agents, durable deploy approval
+│   ├── anth-tui/                       # pi-like terminal client on @earendil-works/pi-tui
+│   └── proactive-demo/            # the hook: Jev log watcher, incident agents, durable deploy approval
 ├── images/                            # README diagrams, numbered in reading order
 ├── .claude/                           # commands/ (prime, install), skills/agent-sandboxes-exe-dev/ (device ops)
 └── ai_docs/                           # pi and pi-durable documentation snapshots
@@ -333,7 +343,7 @@ just proactive take        # reset and run the proactive demo
 - **A token is a shell.** Anyone holding a device's token can run commands as that device's user. `start_dirs` only set where sessions begin. They are not a sandbox.
 - **LAN `ssh` devices speak plain HTTP**, so tokens cross the LAN in cleartext. exe.dev devices use HTTPS, and their proxy is public, so the token is the only gate.
 - **The hub holds every token.** It binds `127.0.0.1` and checks Host and Origin headers. Binding it to the LAN exposes every device it can reach.
-- **`dpi-backend` binds `127.0.0.1` unless told otherwise.** For `ssh` and `exe-dev` devices, `just net up` writes `DPI_HOST=0.0.0.0` (the default for the YAML's `host`) so clients can reach them, and the token guards everything under `/v1`.
+- **`anth-backend` binds `127.0.0.1` unless told otherwise.** For `ssh` and `exe-dev` devices, `just net up` writes `ANTH_HOST=0.0.0.0` (the default for the YAML's `host`) so clients can reach them, and the token guards everything under `/v1`.
 - **`jev-damage-control` is a guard, not a sandbox.** It sends each command to a third-party API, and when Jev is unreachable the command runs.
 - **The proactive demo has no login** and its agents run `bash`. It binds `127.0.0.1` unless you pass `--host 0.0.0.0`.
 - **macOS devices run as a LaunchAgent** in the logged-in session, so unattended reboots need auto-login.
@@ -347,16 +357,6 @@ MIT — see [`LICENSE`](LICENSE).
 
 ---
 
-## Want To Master Agentic Engineering?
+## Credits
 
-The next leap for engineers is coming soon. 
-
-Join the [Early Sign-Up](https://agenticengineer.com/ia3-pre-launch?y=durapi).
-
-Follow the [IndyDevDan YouTube channel](https://www.youtube.com/@indydevdan) to improve your agentic coding advantage.
-
----
-
-Stay Focused and Keep Building
-
-- IndyDevDan
+Forked from [disler/durable-pi](https://github.com/disler/durable-pi) by IndyDevDan ([YouTube](https://www.youtube.com/@indydevdan)), built on pi-durable by Earendil. MIT licensed.
