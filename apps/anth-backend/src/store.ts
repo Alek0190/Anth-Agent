@@ -501,16 +501,19 @@ export class Store {
 
   // ------------------------------------------------------------ clients and projects
 
+  /** Every client on this device, sorted by name. */
   clients(): ClientSummary[] {
     return this.catalog.prepare("SELECT slug,name,createdAt FROM clients ORDER BY name COLLATE NOCASE").all() as unknown as ClientSummary[];
   }
 
+  /** Every project on this device, grouped by client and sorted by name. */
   projects(): ProjectSummary[] {
     return this.catalog
       .prepare("SELECT client,slug,name,createdAt FROM projects ORDER BY client, name COLLATE NOCASE")
       .all() as unknown as ProjectSummary[];
   }
 
+  /** One project by its client and project ids; `404` when this device does not have it. */
   project(client: string, slug: string): ProjectSummary {
     const found = this.catalog
       .prepare("SELECT client,slug,name,createdAt FROM projects WHERE client=? AND slug=?")

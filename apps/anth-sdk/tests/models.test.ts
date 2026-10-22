@@ -204,6 +204,7 @@ test("session lineage and network tree nest forks and subagents", () => {
 
 test("project tree merges clients and projects across devices; unassigned sessions stay under devices", () => {
   const agents: AgentSummary[] = [{ id: 1, name: "Main", named: false, kind: "root", busy: false, background: 0 }];
+  /** A minimal session summary, optionally placed in a project and environment. */
   const session = (id: string, name: string, project?: string, env?: "dev" | "staging" | "prod") => ({
     id, name, cwd: "/w", model: "m", createdAt: 1, dbPath: "/d", busy: false, agents, ...(project ? { project, env } : {}),
   });

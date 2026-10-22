@@ -387,8 +387,11 @@ export type TreeNode =
       children: TreeNode[];
     };
 
+/** Tree key of a client row. */
 export const clientKey = (client: string) => `c/${client}`;
+/** Tree key of a project row, from its `<client>/<project>` ref. */
 export const projectKey = (ref: string) => `c/${ref.split("/")[0]}/p/${ref.split("/")[1]}`;
+/** Tree key of one environment row of a project. */
 export const envKey = (ref: string, env: string) => `${projectKey(ref)}/e/${env}`;
 /** The tree keys to open so a session in this project and environment is visible. */
 export const placementKeys = (ref: string, env: string) => [clientKey(ref.split("/")[0]), projectKey(ref), envKey(ref, env)];
@@ -419,6 +422,7 @@ export function agentTree(deviceId: string, session: SessionSummary, stale: bool
   return roots;
 }
 
+/** A session row with its agents nested under it; the key is the same wherever the session shows. */
 const sessionNode = (deviceId: string, session: SessionSummary, stale: boolean): TreeNode => ({
   type: "session",
   key: sessionKey(deviceId, session.id),
@@ -440,6 +444,7 @@ export function projectTree(devices: readonly NetworkDevice[]): TreeNode[] {
   const onlineProjects = new Set<string>();
   const envs = new Map<string, EnvNode>();
 
+  /** The merged entry for a client id, created on first sight. */
   const clientOf = (slug: string) => {
     let entry = clients.get(slug);
     if (!entry) {
@@ -448,6 +453,7 @@ export function projectTree(devices: readonly NetworkDevice[]): TreeNode[] {
     }
     return entry;
   };
+  /** The merged project row for a ref; records which devices have it and whether any of them is online. */
   const projectOf = (ref: string, deviceId: string, online: boolean, summary?: ProjectSummary) => {
     const [client, slug] = ref.split("/");
     const entry = clientOf(client);
@@ -489,7 +495,9 @@ export function projectTree(devices: readonly NetworkDevice[]): TreeNode[] {
     }
   }
 
+  /** Case-insensitive name order. */
   const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+  /** dev, then staging, then prod. */
   const envOrder = (n: TreeNode) => ENVIRONMENTS.indexOf((n as EnvNode).env);
   return [...clients.values()]
     .sort((a, b) => byName(a.client.name, b.client.name))
@@ -544,6 +552,7 @@ export class NetworkModel extends Emitter {
   tree() {
     return networkTree(this.devices);
   }
+  /** Clients → projects → environments for the current devices. */
   projects() {
     return projectTree(this.devices);
   }

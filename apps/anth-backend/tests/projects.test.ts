@@ -6,6 +6,7 @@ import { AnthClient } from "../../anth-sdk/src/client.js";
 import { AnthError } from "../../anth-sdk/src/errors.js";
 import { bootServer, faux, newToken, tempStore } from "./helpers.js";
 
+/** Matches an AnthError with this error code, for assert.rejects. */
 const code = (c: string) => (e: AnthError) => e.code === c;
 
 test("clients, projects and environments: upsert, placement, moves, tree, restart", async () => {

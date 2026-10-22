@@ -120,6 +120,7 @@ export interface UpdateSessionBody {
 }
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
+/** True for a valid client or project id: lowercase letters, digits and inner dashes, at most 48 characters. */
 export const isSlug = (value: unknown): value is string => typeof value === "string" && SLUG.test(value);
 /** "Dental Co." → "dental-co". Empty when the name has no letters or digits. */
 export const slugify = (name: string) =>
@@ -130,6 +131,7 @@ export const slugify = (name: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 48)
     .replace(/-+$/, "");
+/** A project's network-wide id, `<client>/<project>`. */
 export const projectRef = (p: Pick<ProjectSummary, "client" | "slug">) => `${p.client}/${p.slug}`;
 
 // ---------------------------------------------------------------- sessions and agents

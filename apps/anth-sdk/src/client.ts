@@ -144,6 +144,7 @@ export class AnthClient {
   }
 
   // ------------------------------------------------------------ clients and projects
+  /** Every client on this device. */
   clients() {
     return this.request<ClientSummary[]>("GET", "/v1/clients");
   }
@@ -151,9 +152,11 @@ export class AnthClient {
   putClient(slug: string, body: UpsertClientBody) {
     return this.request<ClientSummary>("PUT", `/v1/clients/${enc(slug)}`, body);
   }
+  /** Every project on this device. */
   projects() {
     return this.request<ProjectSummary[]>("GET", "/v1/projects");
   }
+  /** One project plus the ids of its sessions on this device. */
   project(client: string, slug: string) {
     return this.request<ProjectSummary & { sessions: string[] }>("GET", `/v1/projects/${enc(client)}/${enc(slug)}`);
   }
