@@ -18,7 +18,9 @@ import type {
   SendResult,
   SessionSummary,
   TaskOutcome,
+  TeamInfo,
   UpdateSessionBody,
+  UpdateTeamBody,
   UpsertClientBody,
   UpsertProjectBody,
   WhenBusy,
@@ -200,6 +202,14 @@ export class SessionHandle {
   }
   archive() {
     return this.client.request<{ archived: string }>("DELETE", this.base);
+  }
+  /** The session's agent team: whether the root agent leads one, and each role's model and tools. */
+  team() {
+    return this.client.request<TeamInfo>("GET", `${this.base}/team`);
+  }
+  /** Turn the team on or off, or change a role's model (`null` restores its default). */
+  setTeam(body: UpdateTeamBody) {
+    return this.client.request<TeamInfo>("PATCH", `${this.base}/team`, body);
   }
   agents() {
     return this.client.request<AgentSummary[]>("GET", `${this.base}/agents`);

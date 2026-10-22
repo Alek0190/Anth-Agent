@@ -22,7 +22,10 @@ import type {
   UsageTotals,
   WhenBusy,
   ProjectSummary,
+  TeamInfo,
+  TeamRoleId,
   UpdateSessionBody,
+  UpdateTeamBody,
   WireEntry,
 } from "../../anth-sdk/src/api.js";
 import {
@@ -66,6 +69,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { createPlayground, Workspace, type SpawnSession } from "./extensions.js";
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
+import { createTeam, roleDef, ROLES, type TeamSettings } from "./team.js";
 import { JOB_RUNS_DOC } from "../../anth-sdk/src/jobs.js";
 
 export const DURABLE_VERSION = "1.0.3";
@@ -80,6 +84,7 @@ export const WRITE_TOOLS = new Set([
   "ping_on_call_engineer",
   "subagent",
   "start_session",
+  "delegate",
 ]);
 
 export type SessionRow = {
@@ -135,7 +140,14 @@ export function lockFile(path: string) {
   };
 }
 
-type Opened = { harness: Harness; unlock: () => void; unsubscribe: () => void; jobs: Jobs; addons: Addons };
+type Opened = {
+  harness: Harness;
+  unlock: () => void;
+  unsubscribe: () => void;
+  jobs: Jobs;
+  addons: Addons;
+  team: ReturnType<typeof createTeam>;
+};
 type Resolved = { row: SessionRow; h: Harness; c: Conversation };
 
 const encodeCursor = (cursor: unknown) =>
@@ -163,6 +175,8 @@ export class Store {
   private listeners = new Set<() => void>();
   /** Saved thresholds per session; null when the session uses the defaults for its model. */
   private compactions = new Map<string, Partial<CompactionSettings> | null>();
+  /** Model overrides per team role, per session. */
+  private teams = new Map<string, TeamSettings["models"]>();
   /** Task labels never change once known: tool names of pi.tool tasks, job titles of job runs. */
   private taskLabels = new Map<string, { label?: string; callId?: string }>();
 
@@ -207,6 +221,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS requests(key TEXT PRIMARY KEY,route TEXT NOT NULL,status INTEGER NOT NULL,body TEXT NOT NULL,createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS session_spawns(key TEXT PRIMARY KEY,sessionId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS session_compaction(sessionId TEXT PRIMARY KEY,settings TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS session_team(sessionId TEXT PRIMARY KEY,models TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS clients(slug TEXT PRIMARY KEY,name TEXT NOT NULL,createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS projects(client TEXT NOT NULL REFERENCES clients(slug),slug TEXT NOT NULL,name TEXT NOT NULL,createdAt INTEGER NOT NULL,PRIMARY KEY(client,slug));`);
     // Catalogs from before projects: sessions gain a nullable project and environment.
@@ -425,6 +440,8 @@ export class Store {
     if (body.thinkingLevel !== undefined && !THINKING_LEVELS.includes(body.thinkingLevel))
       throw invalid("Invalid thinking level");
     const placement = this.placement(body.project, body.env);
+    if (body.team !== undefined && typeof body.team !== "boolean") throw invalid("team must be a boolean");
+    const withTeam = body.team ?? !!placement.project;
     const id = randomUUID();
     const row: SessionRow = {
       id,
@@ -451,6 +468,7 @@ export class Store {
       this.catalog.exec("ROLLBACK");
       throw e;
     }
+    if (withTeam) await this.setTeam(row, { enabled: true });
     this.notify();
     return this.sessionSummary(row);
   }
@@ -624,6 +642,23 @@ export class Store {
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
       const addons = createAddons({ offline: this.options.provider === "faux" });
       for (const extension of addons.list) registry.install(extension);
+      const team = createTeam({
+        settings: () => ({ enabled: true, models: this.teamModels(row.id) }),
+        route: (modelId) => this.routedModel({ provider: "openrouter", modelId }),
+        name: (conversationId, name) => {
+          try {
+            this.setAgentName(row, conversationId, name);
+          } catch {}
+        },
+        // Read the catalog each time: a session can move to another project or environment while it runs.
+        placement: () => {
+          const current = this.catalog.prepare("SELECT project,env FROM sessions WHERE id=?").get(row.id) as
+            | { project: string | null; env: EnvironmentName | null }
+            | undefined;
+          return { project: current?.project ?? undefined, env: current?.env ?? undefined };
+        },
+      });
+      for (const extension of team.list) registry.install(extension);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
         {
@@ -666,7 +701,7 @@ export class Store {
       row.model = rootModel.modelId;
       this.catalog.prepare("UPDATE sessions SET provider=?,model=? WHERE id=?").run(row.provider, row.model, row.id);
       const unsubscribe = harness.subscribeCommits(() => this.notify());
-      this.opened.set(row.id, { harness, unlock, unsubscribe, jobs, addons });
+      this.opened.set(row.id, { harness, unlock, unsubscribe, jobs, addons, team });
       this.errors.delete(row.id);
       if (create) harness.resume();
       return harness;
@@ -1101,6 +1136,83 @@ export class Store {
     return this.extensionsOf(row, c);
   }
 
+  // ------------------------------------------------------------ the agent team (per session)
+
+  /** Model overrides per role, saved in the catalog; empty when every role uses its default. */
+  teamModels(sessionId: string): TeamSettings["models"] {
+    if (!this.teams.has(sessionId)) {
+      const saved = this.catalog.prepare("SELECT models FROM session_team WHERE sessionId=?").get(sessionId) as
+        | { models: string }
+        | undefined;
+      this.teams.set(sessionId, saved ? (JSON.parse(saved.models) as TeamSettings["models"]) : {});
+    }
+    return this.teams.get(sessionId)!;
+  }
+
+  /** True when the session's root agent has the `team` extension selected. */
+  async teamEnabled(row: SessionRow) {
+    const opened = this.opened.get(row.id);
+    if (!opened) return false;
+    return (await (await opened.harness.root(ctx)).agent(ctx)).extensions.some((e) => e.name === "team");
+  }
+
+  /** GET /v1/sessions/:s/team: whether the root agent leads a team, and every role's tools and current model. */
+  async team(row: SessionRow): Promise<TeamInfo> {
+    const root = await this.harness(row).root(ctx);
+    const agent = await root.agent(ctx);
+    const models = this.teamModels(row.id);
+    return {
+      enabled: agent.extensions.some((e) => e.name === "team"),
+      roles: ROLES.map((role) => ({
+        id: role.id,
+        title: role.title,
+        summary: role.summary,
+        tools: role.tools,
+        writes: role.tools.some((t) => t !== "read" && t !== "bash") || role.id === "lead",
+        defaultModel: role.defaultModel,
+        custom: role.id !== "lead" && models[role.id] !== undefined,
+        model: role.id === "lead" ? (agent.model?.modelId ?? row.model) : this.routedModel({ provider: "openrouter", modelId: models[role.id] ?? role.defaultModel }).modelId,
+      })),
+    };
+  }
+
+  /** PATCH /v1/sessions/:s/team: turn the team on or off, or change a role's model from the next delegation. */
+  async setTeam(row: SessionRow, body: UpdateTeamBody) {
+    const b = (body ?? {}) as Record<string, unknown>;
+    if (b.enabled === undefined && b.models === undefined) throw invalid("Nothing to change: send enabled or models");
+    if (b.enabled !== undefined && typeof b.enabled !== "boolean") throw invalid("enabled must be a boolean");
+    const known = (id: string) => this.modelList.some((m) => m.id === id);
+    const changes = (b.models ?? {}) as Record<string, unknown>;
+    if (typeof changes !== "object" || Array.isArray(changes)) throw invalid("models must be an object of role: model id");
+    for (const [role, model] of Object.entries(changes)) {
+      if (!roleDef(role)) throw invalid(`Unknown role ${role}. Roles: ${ROLES.map((r) => r.id).join(", ")}`);
+      if (model !== null && (typeof model !== "string" || !known(model)))
+        throw invalid(`Unknown model ${String(model)} for ${role}. Choose one from GET /v1/device models`);
+      if (role === "lead" && model === null) throw invalid("The Lead's model is the root agent's model; choose one");
+    }
+    const opened = this.opened.get(row.id);
+    if (!opened) throw new ApiFault("unavailable", this.errors.get(row.id) ?? `Session ${row.name} is unavailable`);
+    const root = await opened.harness.root(ctx);
+    if (typeof b.enabled === "boolean") {
+      const others = (await root.agent(ctx)).extensions.filter((e) => e.name !== "team");
+      await root.configure({ extensions: b.enabled ? [...others, opened.team.lead] : others }, ctx);
+    }
+    const next = { ...this.teamModels(row.id) };
+    for (const [role, model] of Object.entries(changes)) {
+      if (role === "lead") await root.configure({ model: this.validateModel({ provider: this.options.provider === "faux" ? "faux" : "openrouter", modelId: model as string }) }, ctx);
+      else if (model === null) delete next[role as TeamRoleId];
+      else next[role as TeamRoleId] = model as string;
+    }
+    if (Object.keys(changes).some((r) => r !== "lead")) {
+      this.catalog
+        .prepare("INSERT INTO session_team VALUES(?,?) ON CONFLICT(sessionId) DO UPDATE SET models=excluded.models")
+        .run(row.id, JSON.stringify(next));
+      this.teams.set(row.id, next);
+    }
+    this.notify();
+    return this.team(row);
+  }
+
   // ------------------------------------------------------------ compaction settings (per session)
 
   private windowOf(modelId: string) {
@@ -1198,7 +1310,8 @@ export class Store {
     if (!this.opened.has(row.id))
       return { ...this.sessionSummaryBase(row), busy: false, agents: [], error: this.errors.get(row.id) ?? "Session unavailable" };
     const agents = await this.agents(row);
-    return { ...this.sessionSummaryBase(row), busy: agents.some((a) => a.busy), agents };
+    const team = await this.teamEnabled(row);
+    return { ...this.sessionSummaryBase(row), busy: agents.some((a) => a.busy), agents, ...(team ? { team } : {}) };
   }
 
   async tree(): Promise<DeviceTree> {

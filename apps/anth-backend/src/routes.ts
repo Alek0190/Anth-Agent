@@ -88,6 +88,8 @@ export function v1(store: Store) {
   r.post("/sessions", create, route(async (req, res) => res.status(201).json(await store.create(req.body ?? {}))));
   r.get("/sessions/:s", route(async (_req, res) => res.json(await store.sessionSummary(L(res).row))));
   r.patch("/sessions/:s", route(async (req, res) => res.json(await store.updateSession(L(res).row, req.body ?? {}))));
+  r.get("/sessions/:s/team", route(async (_req, res) => res.json(await store.team(L(res).row))));
+  r.patch("/sessions/:s/team", route(async (req, res) => res.json(await store.setTeam(L(res).row, req.body ?? {}))));
   r.get("/sessions/:s/compaction", route(async (_req, res) => res.json(store.compactionOf(L(res).row.id))));
   r.patch("/sessions/:s/compaction", route(async (req, res) => res.json(store.setCompaction(L(res).row, req.body ?? {}))));
   r.delete("/sessions/:s", route(async (_req, res) => res.json(await store.archive(L(res).row))));
