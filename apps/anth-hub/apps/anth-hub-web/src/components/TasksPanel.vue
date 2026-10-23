@@ -199,7 +199,7 @@ const outcomes = computed(() =>
           </button>
         </li>
       </ul>
-      <p class="hint">Interrupt or Esc stops foreground work and what it owns. Stop all also stops background runs.</p>
+      <p class="hint">Interrupt (or Esc twice) stops foreground work and what it owns. Stop all also stops background runs.</p>
       <button class="secondary danger" :disabled="!tasks.length || stopping" @click="stopAll">
         <Octagon :size="18" />Stop all
       </button>

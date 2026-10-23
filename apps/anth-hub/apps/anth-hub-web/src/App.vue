@@ -68,6 +68,11 @@ function openNewSession() {
   ui.dialog = { kind: "new-session", deviceId: selected.value?.deviceId };
 }
 
+// Escape interrupts only when pressed twice within ESC_WINDOW_MS: one stray Escape (closing a menu, leaving a field,
+// cancelling a screenshot) used to stop a team member mid-task and leave its Lead without an answer.
+const ESC_WINDOW_MS = 2000;
+let escArmedAt = 0;
+
 function keydown(e: KeyboardEvent) {
   const panel = ui.dialog ? undefined : panelHotkey(e);
   if (panel) {
@@ -81,7 +86,13 @@ function keydown(e: KeyboardEvent) {
   }
   if (!e.repeat && !e.isComposing && busy.value) {
     e.preventDefault();
-    void interrupt();
+    if (Date.now() - escArmedAt <= ESC_WINDOW_MS) {
+      escArmedAt = 0;
+      void interrupt();
+    } else {
+      escArmedAt = Date.now();
+      notify("Press Esc again to interrupt");
+    }
   }
   ui.drawer = false;
   ui.inspectorOverlay = false;

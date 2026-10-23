@@ -210,9 +210,14 @@ try {
   pass("follow-up withdraw, reject-if-busy, steer after the tool round");
   await send("!sleep 30");
   await expect(interrupt).toBeEnabled({ timeout: 10000 });
+  // One Escape only arms the interrupt: the work keeps running.
+  await page.locator("body").press("Escape");
+  await expect(page.getByText("Press Esc again to interrupt")).toBeVisible({ timeout: 5000 });
+  await page.waitForTimeout(500);
+  await expect(interrupt).toBeEnabled();
   await page.locator("body").press("Escape");
   await expect(interrupt).toBeDisabled({ timeout: 15000 });
-  pass("Escape interrupts foreground work");
+  pass("a single Escape warns; a second Escape interrupts foreground work");
 
   // Fork at the first assistant entry with a name.
   const firstAgent = chat().locator(".entry.pi-assistant").first();

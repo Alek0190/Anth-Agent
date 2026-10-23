@@ -167,7 +167,7 @@ function withdraw(id: number) {
           <button
             class="interrupt"
             :disabled="!busy || interrupting"
-            title="Stop foreground work and owned subagents (Escape). Background jobs continue."
+            title="Stop foreground work and owned subagents (Esc twice). Background jobs continue."
             @click="interrupt"
           >
             <Octagon :size="24" class="stop-sign" fill="currentColor" />Interrupt</button
