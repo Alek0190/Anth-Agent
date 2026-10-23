@@ -213,9 +213,13 @@ async function projectConfig(p: Phase, dir: string) {
   }
 }
 
-/** The path to check: the input, else anth.json's healthPath, else /. */
+/**
+ * The path to check: the input, else /anth-health on an app server (anth-deploy keeps it open when the site has a
+ * password, and serves the app's health path there), else anth.json's healthPath, else /.
+ */
 async function healthPath(p: Phase, dir: string) {
   if (!auto(p.input.health_path)) return String(p.input.health_path);
+  if ((await deployTarget(p, dir)).kind === "server") return "/anth-health";
   return (await projectConfig(p, dir)).healthPath ?? "/";
 }
 

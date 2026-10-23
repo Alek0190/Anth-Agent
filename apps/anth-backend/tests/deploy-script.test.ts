@@ -156,3 +156,48 @@ test("anth-deploy as a forced command: reads SSH_ORIGINAL_COMMAND and never runs
     s.cleanup();
   }
 });
+
+test("anth-deploy: /anth-health stays open; just server lock puts production and preview behind a password", () => {
+  const s = server();
+  try {
+    assert.equal(s.run(["preview", "site", "abc1234"], { input: s.tarball() }).code, 0);
+    assert.equal(s.run(["promote", "site", "abc1234"]).code, 0);
+    const open = s.file("Caddyfile");
+    assert.match(open, /handle \/anth-health \{\n\t\trewrite \* \/health\n\t\treverse_proxy 127\.0\.0\.1:18000/);
+    assert.doesNotMatch(open, /basicauth/);
+
+    // The lock script with a stand-in caddy: only a hash is stored, and the live Caddyfile is rewritten.
+    const bin = join(s.root, "bin");
+    writeFileSync(join(bin, "caddy"), `#!/usr/bin/env bash\n[ "$1" = hash-password ] && echo '$2a$14$fakeHASHfor'"$(printf %s "$3" | wc -c)"\n`);
+    chmodSync(join(bin, "caddy"), 0o755);
+    const deployBin = join(s.root, "anth-deploy");
+    writeFileSync(deployBin, `#!/usr/bin/env bash\nexec bash ${SCRIPT} "$@"\n`);
+    chmodSync(deployBin, 0o755);
+    const LOCK = resolve(import.meta.dirname, "../../../deploy/server-lock.sh");
+    /** Run server-lock.sh as `just server lock|unlock` does: an optional PW= line, then the script, on stdin. */
+    const lock = (pw?: string) =>
+      spawnSync("bash", ["-s", "--", "site", "alex"], {
+        input: Buffer.concat([Buffer.from(pw === undefined ? "" : `PW=${pw}\n`), readFileSync(LOCK)]),
+        env: { PATH: `${bin}:${process.env.PATH}`, HOME: s.root, ANTH_DEPLOY_ROOT: join(s.root, "srv"), ANTH_DEPLOY_BIN: deployBin, ANTH_CADDY_RELOAD: "echo caddy-reload", ANTH_HEALTH_TRIES: "2" },
+      });
+    const locked = lock("correct-horse-battery");
+    assert.equal(locked.status, 0, locked.stderr.toString());
+    assert.match(s.file("app.env"), /^BASIC_AUTH_USER=alex$/m);
+    assert.doesNotMatch(s.file("app.env"), /correct-horse/);
+    const caddy = s.file("Caddyfile");
+    // Both sites: the health path open, everything else behind the password.
+    assert.equal(caddy.match(/basicauth \{\n\t\t\talex \$2a\$14\$fakeHASHfor21\n\t\t\}/g)?.length, 2);
+    assert.match(caddy, /handle \/anth-health \{[^}]*\}\n\thandle \{\n\t\tbasicauth/);
+    // Later deploys keep the password; unlock removes it.
+    assert.equal(s.run(["preview", "site", "def5678"], { input: s.tarball() }).code, 0);
+    assert.equal(s.run(["promote", "site", "def5678"]).code, 0);
+    assert.match(s.file("Caddyfile"), /reverse_proxy 127\.0\.0\.1:18001/);
+    assert.match(s.file("Caddyfile"), /basicauth/);
+    assert.equal(lock().status, 0);
+    assert.doesNotMatch(s.file("Caddyfile"), /basicauth/);
+    assert.doesNotMatch(s.file("app.env"), /BASIC_AUTH/);
+    assert.match(s.run(["refresh", "nope"]).err, /not set up/);
+  } finally {
+    s.cleanup();
+  }
+});

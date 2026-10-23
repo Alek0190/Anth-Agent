@@ -49,6 +49,8 @@ dir="/srv/anth/$APP"
 # below them are not.
 install -d -o anth -g anth -m 0755 /srv/anth "$dir"
 install -d -o anth -g anth -m 0750 "$dir/releases" "$dir/data" "$dir/preview-data"
+# Keep a password set with `just server lock` across re-runs.
+auth="$(grep '^BASIC_AUTH_' "$dir/app.env" 2>/dev/null || true)"
 cat >"$dir/app.env" <<EOF
 DOMAINS="$DOMAINS"
 PREVIEW_DOMAIN="$PREVIEW_DOMAIN"
@@ -57,6 +59,7 @@ APP_PORT=$APP_PORT
 HEALTH_PATH="$HEALTH_PATH"
 DATA_DIR="$DATA_DIR"
 EOF
+[ -n "$auth" ] && echo "$auth" >>"$dir/app.env"
 for f in env preview.env; do [ -f "$dir/$f" ] || install -o anth -g anth -m 0600 /dev/null "$dir/$f"; done
 chown anth:anth "$dir/app.env"
 chmod 0640 "$dir/app.env"

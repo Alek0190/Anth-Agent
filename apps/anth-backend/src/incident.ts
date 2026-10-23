@@ -23,6 +23,15 @@ const Receipt = defineDoc<{ applied: boolean; taskId: number }>({
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py)$|(^|\/)test_[^/]+\.py$/;
 
+/**
+ * GitHub credentials for git, so private repositories can be fetched: GITHUB_TOKEN as an HTTP header that git sends to
+ * https://github.com/ only (never to another host). It travels as a masked secret, never in the agents' environment.
+ */
+export function githubAuth(): Record<string, string> {
+  const token = process.env.GITHUB_TOKEN;
+  return token ? { ANTH_GIT_AUTH: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}` } : {};
+}
+
 /** Run a git or test command in a folder; never with secrets. */
 const run = (command: string, dir: string, timeoutSec = 600) => runEffect(command, dir, {}, timeoutSec);
 
@@ -40,7 +49,9 @@ export async function defaultBranch(repo: string) {
  * local branch only when the remote cannot be reached.
  */
 export async function baseRef(repo: string, base: string) {
-  await run(`git fetch --quiet origin ${q(base)}`, repo, 120);
+  const secrets = githubAuth();
+  const auth = secrets.ANTH_GIT_AUTH ? `-c http.https://github.com/.extraHeader="$ANTH_GIT_AUTH" ` : "";
+  await runEffect(`git ${auth}fetch --quiet origin ${q(base)}`, repo, secrets, 120);
   return (await run(`git rev-parse --verify --quiet ${q(`origin/${base}`)}`, repo)).code === 0 ? `origin/${base}` : base;
 }
 
