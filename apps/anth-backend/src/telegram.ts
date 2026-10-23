@@ -42,10 +42,15 @@ export interface AlertsConfig {
   dataDir: string;
 }
 
-/** Read the alert settings from the environment; undefined when TELEGRAM_BOT_TOKEN is not set. */
-export function alertsConfig(env: NodeJS.ProcessEnv, dataDir: string): AlertsConfig | undefined {
+/**
+ * Read the alert settings from the environment; undefined when TELEGRAM_BOT_TOKEN is not set, or when TELEGRAM_DEVICE
+ * names another device (one .env feeds every device, and only one may poll the bot).
+ */
+export function alertsConfig(env: NodeJS.ProcessEnv, dataDir: string, device?: string): AlertsConfig | undefined {
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
   if (!token) return undefined;
+  const only = env.TELEGRAM_DEVICE?.trim();
+  if (only && device !== undefined && only !== device) return undefined;
   const after = (env.ANTH_RING_AFTER_MIN ?? "10").trim();
   const minutes = Number(after);
   return {

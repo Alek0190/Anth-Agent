@@ -80,10 +80,12 @@ devices:
   hetzner:
     # … as in HETZNER.md
     env_keys: [OPENROUTER_API_KEY, TYPESAFE_API_KEY, GITHUB_TOKEN, VERCEL_TOKEN, ANTH_DEPLOY_SSH_KEY,
-               TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CALLER_SESSION, TELEGRAM_CALL_TO]
+               TELEGRAM_BOT_TOKEN, TELEGRAM_DEVICE, TELEGRAM_CHAT_ID, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CALLER_SESSION, TELEGRAM_CALL_TO]
 ```
 
-Then run `just net up hetzner`. Do not add the Telegram keys to `defaults`, or every device would run the bot.
+Also put `TELEGRAM_DEVICE=hetzner` in `.env`. A backend you run on your laptop reads the same `.env`; with this line it leaves the bot alone, so only the agent box polls it.
+
+Then run `just net up hetzner`. Do not add the Telegram keys to `defaults`.
 
 Agents never see any of these keys: they run with a clean environment.
 
