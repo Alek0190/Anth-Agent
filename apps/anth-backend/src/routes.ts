@@ -23,6 +23,15 @@ const int = (value: unknown, name: string) => {
   return n;
 };
 
+/**
+ * Log every stop request with who sent it: a stopped agent otherwise only shows "The operation was aborted", and the
+ * backend never stops work on its own, so this line is how to tell an Interrupt, Esc or Stop all from anything else.
+ */
+function logStop(req: import("express").Request, what: string) {
+  const client = req.get("x-anth-client") ?? req.get("user-agent")?.slice(0, 60) ?? "unknown client";
+  console.log(`${new Date().toISOString()} stop requested: ${what} (from ${client})`);
+}
+
 export function v1(store: Store) {
   const r = Router();
   const create = idempotent(store);
@@ -119,7 +128,10 @@ export function v1(store: Store) {
   );
   r.post(
     "/sessions/:s/tasks/:taskId/abort",
-    route(async (req, res) => res.json(await store.abortTask(store.harness(L(res).row), int(req.params.taskId, "taskId")))),
+    route(async (req, res) => {
+      logStop(req, `task #${req.params.taskId} in session ${L(res).row.name}`);
+      res.json(await store.abortTask(store.harness(L(res).row), int(req.params.taskId, "taskId")));
+    }),
   );
   r.get("/sessions/:s/inspect", route(async (_req, res) => res.json(await store.inspect(store.harness(L(res).row)))));
   r.get(
@@ -181,7 +193,14 @@ export function v1(store: Store) {
     `${a}/inbox/:submissionId`,
     route(async (req, res) => res.json(await store.withdraw(L(res).h, L(res).c, int(req.params.submissionId, "submissionId")))),
   );
-  r.post(`${a}/abort`, route(async (req, res) => res.json(await store.abort(L(res).c, req.body?.background === true))));
+  r.post(
+    `${a}/abort`,
+    route(async (req, res) => {
+      const background = req.body?.background === true;
+      logStop(req, `agent #${L(res).c.id} in session ${L(res).row.name}${background ? " and its background jobs" : ""}`);
+      res.json(await store.abort(L(res).c, background));
+    }),
+  );
   r.post(`${a}/fork`, create, route(async (req, res) => res.status(201).json(await store.fork(L(res).row, L(res).c, req.body ?? {}))));
   r.get(`${a}/config`, route(async (_req, res) => res.json((await store.agentDetail(L(res).row, L(res).c)).config)));
   r.patch(`${a}/config`, route(async (req, res) => res.json(await store.configure(L(res).row, L(res).c, req.body ?? {}))));
