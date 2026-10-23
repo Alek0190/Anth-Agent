@@ -8,7 +8,8 @@
 // is safe to repeat after a crash: the pull request is looked up before it is created, pushing the same branch again
 // changes nothing, and promoting the same deployment twice leaves production as it was.
 //
-// Rollback is its own job: approve → roll back → verify.
+// Rollback is its own job: target → approve → roll back → verify. On an app server the target release is fixed before
+// the approval, so a replay after a crash promotes that same release again (a no-op) instead of flipping back.
 import type { JobDef } from "../../anth-sdk/src/jobs.js";
 import type { Handler, Outcome, Phase } from "./jobs.js";
 
@@ -48,6 +49,7 @@ export const SHIP_DEFS: JobDef[] = [
     title: "Roll back production",
     summary: "After your approval, put the previous production deployment back on Vercel and check production answers.",
     phases: [
+      { id: "target", label: "Find the release", summary: "The release production goes back to" },
       { id: "approve", label: "Approve rollback", summary: "Wait for your approval", kind: "approval" },
       { id: "rollback", label: "Roll back", summary: "Restore the previous production deployment" },
       { id: "verify", label: "Verify production", summary: "Production answers over HTTP" },
@@ -495,20 +497,45 @@ const ship: Record<string, Handler> = {
   },
 };
 
+/** Parse `anth-deploy status` output into the current and previous production commits ("" when there is none). */
+export function parseStatus(out: string): { current: string; previous: string } {
+  const pick = (key: string) => {
+    const sha = out.match(new RegExp(`^${key}: ([0-9a-f]{7,40})\\b`, "m"))?.[1];
+    return sha ?? "";
+  };
+  return { current: pick("current"), previous: pick("previous") };
+}
+
 const rollback: Record<string, Handler> = {
+  target: async (p) => {
+    const target = await deployTarget(p, String(p.input.path));
+    if (target.kind !== "server") return { done: "Vercel's previous production deployment" };
+    const out = await p.effect(sshCommand(target, `status ${target.app}`), {
+      label: `read production on ${target.host}`,
+      dir: String(p.input.path),
+      secrets: serverSecrets(),
+      timeoutSec: 60,
+    });
+    const { current, previous } = parseStatus(out);
+    if (!previous) throw Error(`no previous production deployment of ${target.app} to roll back to`);
+    return { done: `${current || "nothing"} → ${previous}`, data: { rollbackSha: previous } };
+  },
   approve: async () => {
     throw Error("approval phases run in the engine");
   },
   rollback: async (p) => {
     const target = await deployTarget(p, String(p.input.path));
     if (target.kind === "server") {
-      await p.effect(sshCommand(target, `rollback ${target.app}`), {
-        label: `roll back production on ${target.host}`,
+      // Promote the release chosen before approval. Promoting what is already live is a no-op, so a replay is safe.
+      const sha = String(p.data.rollbackSha ?? "");
+      if (!sha) throw Error("No rollback release was chosen");
+      await p.effect(sshCommand(target, `promote ${target.app} ${sha}`), {
+        label: `roll back production to ${sha} on ${target.host}`,
         dir: String(p.input.path),
         secrets: serverSecrets(),
         timeoutSec: 900,
       });
-      return { done: "The previous production release is back" };
+      return { done: `${sha} is production again` };
     }
     await p.effect(`${vercel()} rollback --yes --token "$VERCEL_TOKEN"${scope()}`, {
       label: "vercel rollback",

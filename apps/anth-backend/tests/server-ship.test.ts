@@ -9,7 +9,7 @@ import { once } from "node:events";
 import { join, resolve } from "node:path";
 import { AnthClient } from "../../anth-sdk/src/client.js";
 import type { JobRun, JobRunsDoc } from "../../anth-sdk/src/jobs.js";
-import { parseTarget } from "../src/ship.js";
+import { parseStatus, parseTarget } from "../src/ship.js";
 import { bootServer, faux, newToken, tempStore, until } from "./helpers.js";
 
 const SCRIPT = resolve(import.meta.dirname, "../../../deploy/anth-deploy.sh");
@@ -30,6 +30,8 @@ test("anth.json deploy targets are validated", () => {
   assert.throws(() => parseTarget({ target: "ftp" }), /must be "vercel" or "server"/);
   assert.throws(() => parseTarget({ target: "server", host: "x; rm -rf /", app: "site" }), /deploy.host/);
   assert.throws(() => parseTarget({ target: "server", host: "h", app: "Site!" }), /deploy.app/);
+  assert.deepEqual(parseStatus("current: abc1234 (slot 0)\nprevious: def5678\n"), { current: "abc1234", previous: "def5678" });
+  assert.deepEqual(parseStatus("current:  (slot )\nprevious: none\n"), { current: "", previous: "" });
 });
 
 test("ship to an app server: preview over ssh, approval, zero-downtime promote, verify, rollback; the key never reaches agents", async () => {
@@ -147,12 +149,29 @@ SSH_ORIGINAL_COMMAND="$*" ANTH_DEPLOY_ROOT=${srv} ANTH_CADDY_RELOAD=true ANTH_UR
     assert.match(readFileSync(join(srv, "site", "Caddyfile"), "utf8"), /reverse_proxy 127\.0\.0\.1:18000/);
     assert.match((await runOf(taskId)).result ?? "", /\/prod answers 200/);
 
-    // With only one release there is nothing to roll back to, and the job says so.
+    // With only one release there is nothing to roll back to: the job says so before asking for approval.
+    const none = await lead.demo<{ taskId: number }>("jobs", { job: "rollback", input: { path: "site" } });
+    await until(async () => (await runOf(none.taskId)).status === "failed", 30000, "rollback to fail");
+    assert.match((await runOf(none.taskId)).error ?? "", /no previous production deployment/);
+
+    // A second release, then a rollback: the target is fixed before approval and promoted by its commit.
+    writeFileSync(join(repo, "index.html"), "v3");
+    const second = await lead.demo<{ taskId: number }>("jobs", { job: "ship", input: { path: "site" } });
+    await waitFor(second.taskId, "waiting");
+    const sha2 = git(repo, "rev-parse", "--short=12", "HEAD");
+    await lead.demo(`jobs/${second.taskId}/approval`, { approved: true });
+    await waitFor(second.taskId, "completed");
+    assert.equal(readFileSync(join(srv, "site", "current"), "utf8").trim(), `1 ${sha2}`);
+
     const rb = await lead.demo<{ taskId: number }>("jobs", { job: "rollback", input: { path: "site" } });
     await waitFor(rb.taskId, "waiting");
+    assert.equal((await runOf(rb.taskId)).phases.find((p) => p.id === "target")?.summary, `${sha2} → ${sha}`);
     await lead.demo(`jobs/${rb.taskId}/approval`, { approved: true });
-    await until(async () => (await runOf(rb.taskId)).status === "failed", 30000, "rollback to fail");
-    assert.match((await runOf(rb.taskId)).error ?? "", /no previous production deployment/);
+    await waitFor(rb.taskId, "completed");
+    // Promoted twice by the same commit: once by the first ship, once by the rollback. No "rollback" command is sent.
+    assert.equal(calls().split("\n").filter((l) => l.startsWith(`ssh anth@app.example.com promote site ${sha} `)).length, 2);
+    assert.doesNotMatch(calls(), /ssh \S+ rollback /);
+    assert.equal(readFileSync(join(srv, "site", "current"), "utf8").trim(), `0 ${sha}`);
   } finally {
     await server.stop();
     site.close();

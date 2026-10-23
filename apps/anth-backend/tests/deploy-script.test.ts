@@ -37,14 +37,14 @@ esac
   chmodSync(join(bin, "docker"), 0o755);
   chmodSync(join(bin, "curl"), 0o755);
   /** Run anth-deploy with these args (or a forced-command string), feeding `input` on stdin. */
-  const run = (args: string[], opts: { input?: Buffer; forced?: string; failPort?: number } = {}) => {
+  const run = (args: string[], opts: { input?: Buffer; forced?: string; failPort?: number; reload?: string } = {}) => {
     const r = spawnSync("bash", [SCRIPT, ...args], {
       input: opts.input ?? Buffer.alloc(0),
       env: {
         PATH: `${bin}:${process.env.PATH}`,
         HOME: root,
         ANTH_DEPLOY_ROOT: srv,
-        ANTH_CADDY_RELOAD: `echo caddy-reload`,
+        ANTH_CADDY_RELOAD: opts.reload ?? `echo caddy-reload`,
         ANTH_HEALTH_TRIES: "2",
         ...(opts.forced !== undefined ? { SSH_ORIGINAL_COMMAND: opts.forced } : {}),
         ...(opts.failPort ? { FAIL_PORT: String(opts.failPort) } : {}),
@@ -111,6 +111,16 @@ test("anth-deploy: preview, zero-downtime promote between slots, rollback, refus
     assert.notEqual(unhealthy.code, 0);
     assert.match(unhealthy.err, /did not answer on \/health; production is unchanged/);
     assert.equal(s.file("current"), "0 abc1234");
+
+    // Caddy rejects the new config: the old Caddyfile comes back, production and its state are unchanged.
+    const live = s.file("Caddyfile");
+    assert.equal(s.run(["preview", "site", "cad0000"], { input: s.tarball() }).code, 0);
+    const rejected = s.run(["promote", "site", "cad0000"], { reload: "false" });
+    assert.notEqual(rejected.code, 0);
+    assert.match(rejected.err, /caddy reload failed; production is unchanged/);
+    assert.equal(s.file("Caddyfile"), live);
+    assert.equal(s.file("current"), "0 abc1234");
+    assert.equal(existsSync(join(s.app, "Caddyfile.bak")), false);
 
     // Refusals: no image, no Dockerfile, bad names, unknown commands.
     assert.match(s.run(["promote", "site", "fff9999"]).err, /no image for fff9999/);

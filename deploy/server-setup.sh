@@ -44,7 +44,10 @@ id anth >/dev/null 2>&1 || useradd -m -s /bin/bash anth
 usermod -aG docker anth
 install -m 0755 /tmp/anth-deploy /usr/local/bin/anth-deploy
 dir="/srv/anth/$APP"
-install -d -o anth -g anth -m 0750 /srv/anth "$dir" "$dir/releases" "$dir/data" "$dir/preview-data"
+# Caddy (user caddy) reads /srv/anth/*/Caddyfile, so these two folders are world-readable; secrets, source and data
+# below them are not.
+install -d -o anth -g anth -m 0755 /srv/anth "$dir"
+install -d -o anth -g anth -m 0750 "$dir/releases" "$dir/data" "$dir/preview-data"
 cat >"$dir/app.env" <<EOF
 DOMAINS="$DOMAINS"
 PREVIEW_DOMAIN="$PREVIEW_DOMAIN"
@@ -55,6 +58,7 @@ DATA_DIR="$DATA_DIR"
 EOF
 for f in env preview.env; do [ -f "$dir/$f" ] || install -o anth -g anth -m 0600 /dev/null "$dir/$f"; done
 chown anth:anth "$dir/app.env"
+chmod 0640 "$dir/app.env"
 
 echo "== deploy key (forced command)"
 install -d -o anth -g anth -m 0700 /home/anth/.ssh
@@ -84,6 +88,7 @@ $PREVIEW_DOMAIN {
 EOF
   chown anth:anth "$dir/Caddyfile"
 fi
+chmod 0644 "$dir/Caddyfile"
 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 
 if command -v ufw >/dev/null; then

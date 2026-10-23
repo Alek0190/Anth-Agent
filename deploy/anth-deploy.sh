@@ -89,8 +89,15 @@ $PREVIEW_DOMAIN {
 	reverse_proxy 127.0.0.1:$((BASE_PORT + 2))
 }
 EOF
+  chmod 0644 "$dir/Caddyfile.new"
+  # Keep the live file: if Caddy rejects the new one, put it back so the file always matches what is served.
+  [ -f "$dir/Caddyfile" ] && cp -p "$dir/Caddyfile" "$dir/Caddyfile.bak"
   mv "$dir/Caddyfile.new" "$dir/Caddyfile"
-  $RELOAD >&2 || die "caddy reload failed"
+  if ! $RELOAD >&2; then
+    [ -f "$dir/Caddyfile.bak" ] && mv "$dir/Caddyfile.bak" "$dir/Caddyfile" && $RELOAD >&2 || true
+    return 1
+  fi
+  rm -f "$dir/Caddyfile.bak"
 }
 
 # The production slot that is live now (0 or 1) and the image it runs; empty before the first promote.
@@ -117,7 +124,10 @@ promote() {
     docker rm -f "anth-$app-$new_slot" >/dev/null 2>&1 || true
     die "$target did not answer on $HEALTH_PATH; production is unchanged"
   fi
-  caddyfile "$port"
+  if ! caddyfile "$port"; then
+    docker rm -f "anth-$app-$new_slot" >/dev/null 2>&1 || true
+    die "caddy reload failed; production is unchanged"
+  fi
   echo "$new_slot $target" >"$dir/current"
   [ -n "$old_sha" ] && echo "$old_slot $old_sha" >"$dir/previous"
   [ -n "$old_slot" ] && docker stop "anth-$app-$old_slot" >/dev/null 2>&1 || true

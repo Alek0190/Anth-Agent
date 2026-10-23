@@ -120,7 +120,13 @@ hooks.anthwebbuilder.com {
 }
 ```
 
-Add an **A** record `hooks` → agent box IP, and use `https://hooks.anthwebbuilder.com<webhookPath>` from the Watch tab.
+Open the web ports so Caddy can get its certificate and receive webhooks (step 7 only allowed SSH and Tailscale):
+
+```bash
+ssh root@AGENT_IP 'ufw allow 80/tcp && ufw allow 443/tcp'
+```
+
+The backend port 4780 stays closed to the internet: Caddy reaches it on 127.0.0.1. Add an **A** record `hooks` → agent box IP, and use `https://hooks.anthwebbuilder.com<webhookPath>` from the Watch tab.
 
 ## Day to day
 
