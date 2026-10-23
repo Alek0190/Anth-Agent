@@ -648,6 +648,12 @@ try {
   await page.locator(".tree-row.agent").filter({ hasText: "Backend developer" }).click();
   await expect(page.locator(".member-banner")).toContainText("Backend developer");
   await expect(page.locator(".member-banner")).toContainText("can't delegate or ship");
+  // Sending while the member is selected goes to its owner, and the view follows.
+  await send("!echo routed-to-the-lead");
+  await expect(page.locator(".member-banner")).toHaveCount(0, { timeout: 10000 });
+  await expect(chat().getByText("routed-to-the-lead").first()).toBeVisible({ timeout: 20000 });
+  await page.locator(".tree-row.agent").filter({ hasText: "Backend developer" }).click();
+  await expect(page.locator(".member-banner")).toBeVisible();
   await page.getByRole("button", { name: "Message its owner" }).click();
   await expect(page.locator(".member-banner")).toHaveCount(0);
   await expect(

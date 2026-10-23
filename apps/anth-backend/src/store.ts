@@ -1485,6 +1485,24 @@ export class Store {
     return out;
   }
 
+  /** True when this conversation is the session's root agent and that agent leads a team (the autopilot's Lead). */
+  async isLead(sessionId: string, conversationId: number) {
+    const opened = this.opened.get(sessionId);
+    if (!opened) return false;
+    const root = await opened.harness.root(ctx);
+    if ((root.id as number) !== conversationId) return false;
+    return (await root.agent(ctx)).extensions.some((e) => e.name === "team");
+  }
+
+  /** Submit text to a conversation as a follow-up, idempotent by requestId (autopilot notices). */
+  async submitTo(sessionId: string, conversationId: number, text: string, requestId: string) {
+    const opened = this.opened.get(sessionId);
+    const c = opened && (await opened.harness.conversation(conversationId as ConversationId, ctx));
+    if (!c) throw Error(`Conversation ${conversationId} of session ${sessionId} is not open`);
+    await c.submit({ type: "input", content: text, requestId, whenBusy: "followUp" }, ctx);
+    opened.harness.resume();
+  }
+
   /** Approve or decline a pending run by where it lives (Telegram buttons). */
   async approveRun(sessionId: string, conversationId: number, taskId: number, approved: boolean) {
     const opened = this.opened.get(sessionId);

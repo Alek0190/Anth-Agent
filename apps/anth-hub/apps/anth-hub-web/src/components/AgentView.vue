@@ -319,8 +319,8 @@ watch(
     </div>
     <div v-if="current?.kind === 'subagent'" class="member-banner" role="status">
       <span
-        >You're messaging <b>{{ current.name || `agent #${current.id}` }}</b>, a team member. It works on one
-        task for its owner and can't delegate or ship.</span
+        >You're viewing <b>{{ current.name || `agent #${current.id}` }}</b>, a team member. It works on one
+        task for its owner and can't delegate or ship, so what you send here goes to its owner.</span
       >
       <button
         v-if="current.ownerAgentId !== undefined"

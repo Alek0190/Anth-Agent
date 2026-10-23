@@ -8,6 +8,7 @@ import { bearerAuth } from "./auth.js";
 import { errorMiddleware } from "./errors.js";
 import { v1 } from "./routes.js";
 import { Alerts, alertsConfig } from "./telegram.js";
+import { Autopilot } from "./autopilot.js";
 
 const config = loadConfig();
 const store = await Store.open({
@@ -32,6 +33,18 @@ const alerts =
     alertSettings,
   );
 alerts?.start();
+
+// The Lead hears how its ship and rollback runs ended, and acts on it without the owner relaying it.
+const autopilot = new Autopilot(
+  {
+    alertRuns: () => store.alertRuns(),
+    isLead: (s, c) => store.isLead(s, c),
+    submit: (s, c, text, requestId) => store.submitTo(s, c, text, requestId),
+    subscribe: (fn) => store.subscribe(fn),
+  },
+  config.dataDir,
+);
+autopilot.start();
 
 const app = express();
 app.disable("x-powered-by");
@@ -62,6 +75,7 @@ const shutdown = async () => {
   server.close();
   server.closeAllConnections();
   await alerts?.stop();
+  await autopilot.stop();
   await store.close();
   process.exit(0);
 };
