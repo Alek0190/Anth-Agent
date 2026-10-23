@@ -10,7 +10,7 @@
 //
 // Rollback is its own job: approve → roll back → verify.
 import type { JobDef } from "../../anth-sdk/src/jobs.js";
-import type { Handler, Phase } from "./jobs.js";
+import type { Handler, Outcome, Phase } from "./jobs.js";
 
 const RESULT = "/jobs/ship";
 
@@ -138,6 +138,63 @@ function vercelSecrets(device: string) {
       `VERCEL_TOKEN is not set on ${device}. Add it to .env and to env_keys in anth-network.yaml, then run just net up ${device}.`,
     );
   return { VERCEL_TOKEN: token };
+}
+
+/** Where a project deploys: Vercel (the default) or an app server reached over SSH (anth.json "deploy"). */
+export type DeployTarget = { kind: "vercel" } | { kind: "server"; host: string; user: string; app: string };
+
+/** Read and validate anth.json's "deploy" block: {"target": "server", "host": "1.2.3.4", "app": "my-app"}. */
+export function parseTarget(raw: unknown): DeployTarget {
+  const d = (raw ?? {}) as Record<string, unknown>;
+  if (d.target === undefined || d.target === "vercel") return { kind: "vercel" };
+  if (d.target !== "server") throw Error(`anth.json deploy.target must be "vercel" or "server", not ${JSON.stringify(d.target)}`);
+  const host = typeof d.host === "string" ? d.host.trim() : "";
+  const app = typeof d.app === "string" ? d.app.trim() : "";
+  const user = typeof d.user === "string" && d.user.trim() ? d.user.trim() : "anth";
+  if (!/^[A-Za-z0-9][A-Za-z0-9.:_-]*$/.test(host)) throw Error("anth.json deploy.host must be the server's address, e.g. 203.0.113.7");
+  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(app)) throw Error("anth.json deploy.app must be the app name used in just server setup");
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user)) throw Error("anth.json deploy.user must be a Unix user name");
+  return { kind: "server", host, user, app };
+}
+
+/** The project's deploy target from its anth.json. */
+async function deployTarget(p: Phase, dir: string) {
+  const r = await p.shell(inDir(dir, "cat anth.json 2>/dev/null || true"));
+  let parsed: { deploy?: unknown } = {};
+  try {
+    parsed = JSON.parse(r.out || "{}");
+  } catch {
+    throw Error("anth.json is not valid JSON");
+  }
+  return parseTarget(parsed.deploy);
+}
+
+/**
+ * The deploy key for app servers, from ANTH_DEPLOY_SSH_KEY (the private key, base64 or as is). It never touches disk
+ * outside the one command that uses it: a 0600 temp file, removed when the command ends.
+ */
+function serverSecrets() {
+  const raw = env("ANTH_DEPLOY_SSH_KEY");
+  if (!raw)
+    throw Error(
+      "ANTH_DEPLOY_SSH_KEY is not set on this device. Run just server keygen, add ANTH_DEPLOY_SSH_KEY to env_keys in anth-network.yaml, then just net up <device>.",
+    );
+  const key = raw.includes("PRIVATE KEY") ? raw : Buffer.from(raw, "base64").toString("utf8");
+  if (!key.includes("PRIVATE KEY")) throw Error("ANTH_DEPLOY_SSH_KEY is not a private key (base64 of the key file)");
+  const home = env("ANTH_HOME") ?? `${env("HOME") ?? "~"}/.anth`;
+  return { ANTH_DEPLOY_SSH_KEY: key.endsWith("\n") ? key : `${key}\n`, ANTH_KNOWN_HOSTS: `${home}/known_hosts` };
+}
+
+/** A shell command that runs `anth-deploy <args>` on the server with the deploy key. */
+function sshCommand(t: Extract<DeployTarget, { kind: "server" }>, args: string) {
+  const ssh = env("ANTH_SSH_BIN") ?? "ssh";
+  // A subshell, so a pipe into it (git archive | …) feeds ssh, and the key file goes when it ends.
+  return (
+    `( k=$(mktemp) && trap 'rm -f "$k"' EXIT && printf '%s' "$ANTH_DEPLOY_SSH_KEY" > "$k" && chmod 600 "$k" && ` +
+    `mkdir -p "$(dirname "$ANTH_KNOWN_HOSTS")" && ` +
+    `${ssh} -i "$k" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$ANTH_KNOWN_HOSTS" ` +
+    `${q(`${t.user}@${t.host}`)} ${args} )`
+  );
 }
 
 /** The project's anth.json: productionUrl and healthPath, when the team or you wrote one. */
@@ -299,8 +356,22 @@ const ship: Record<string, Handler> = {
     };
   },
 
-  preview: async (p) => {
+  preview: async (p): Promise<Outcome> => {
     const dir = String(p.input.path);
+    const target = await deployTarget(p, dir);
+    if (target.kind === "server") {
+      // The committed tree goes to the server as a tar; it builds the Dockerfile and runs it on the preview slot.
+      const sha = (await p.exec(inDir(dir, "git rev-parse --short=12 HEAD"), "git rev-parse --short=12 HEAD")).trim();
+      const out = await p.effect(`git archive --format=tar HEAD | ${sshCommand(target, `preview ${target.app} ${sha}`)}`, {
+        label: `deploy preview of ${sha} to ${target.host}`,
+        dir,
+        secrets: serverSecrets(),
+        timeoutSec: 1800,
+      });
+      const url = lastUrl(out);
+      if (!url) throw Error(`The server printed no preview URL: ${out.trim().split("\n").slice(-3).join(" ")}`);
+      return { done: url, data: { previewUrl: url, previewSha: sha } };
+    }
     const out = await p
       .effect(`${vercel()} deploy --yes --token "$VERCEL_TOKEN"${scope()}`, {
         label: "vercel deploy (preview)",
@@ -382,6 +453,19 @@ const ship: Record<string, Handler> = {
 
   promote: async (p) => {
     const dir = String(p.input.path);
+    const target = await deployTarget(p, dir);
+    if (target.kind === "server") {
+      const sha = String(p.data.previewSha ?? "");
+      if (!sha) throw Error("No previewed build to promote");
+      // anth-deploy runs the same image on the idle production slot, health checks it, then switches Caddy to it.
+      await p.effect(sshCommand(target, `promote ${target.app} ${sha}`), {
+        label: `promote ${sha} to production on ${target.host}`,
+        dir,
+        secrets: serverSecrets(),
+        timeoutSec: 900,
+      });
+      return { done: `${sha} is production on ${target.host}` };
+    }
     await p.effect(`${vercel()} promote ${q(String(p.data.previewUrl))} --yes --token "$VERCEL_TOKEN"${scope()}`, {
       label: `vercel promote ${p.data.previewUrl}`,
       dir,
@@ -416,6 +500,16 @@ const rollback: Record<string, Handler> = {
     throw Error("approval phases run in the engine");
   },
   rollback: async (p) => {
+    const target = await deployTarget(p, String(p.input.path));
+    if (target.kind === "server") {
+      await p.effect(sshCommand(target, `rollback ${target.app}`), {
+        label: `roll back production on ${target.host}`,
+        dir: String(p.input.path),
+        secrets: serverSecrets(),
+        timeoutSec: 900,
+      });
+      return { done: "The previous production release is back" };
+    }
     await p.effect(`${vercel()} rollback --yes --token "$VERCEL_TOKEN"${scope()}`, {
       label: "vercel rollback",
       dir: String(p.input.path),

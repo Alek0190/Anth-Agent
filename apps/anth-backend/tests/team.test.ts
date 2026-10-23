@@ -102,6 +102,11 @@ test("a delegation survives a crash: same member, same task, one answer", async 
     const lead = client.agent(s.id, "main");
     const queued = await lead.send("delegate: frontend | !sleep 4; echo done > slow.txt", "followUp", "crash-1");
     await until(async () => (await client.session(s.id).agents()).some((a) => a.name === "Frontend developer"), 15000, "member started");
+    // Crash only once the member's bash is running, so there is a tool call to interrupt.
+    await until(async () => {
+      const member = (await client.session(s.id).agents()).find((a) => a.name === "Frontend developer");
+      return !!member && /bash/.test(JSON.stringify(await client.agent(s.id, member.id).transcript("markdown")));
+    }, 15000, "member bash running");
     await server.stop("SIGKILL");
     await server.start();
     const settled = await client.session(s.id).submission(queued.submissionId, 60000);
