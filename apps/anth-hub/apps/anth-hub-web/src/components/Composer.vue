@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { ArrowUp, ChevronDown, Clock3, Octagon, X } from "lucide-vue-next";
 import type { WhenBusy } from "@sdk/api";
 import { newId } from "../client/ids";
@@ -11,10 +11,28 @@ import {
   busy,
   interrupt,
   interrupting,
+  notify,
   online,
+  select,
   selected,
+  sessionAgents,
   ui,
 } from "../client/store";
+
+/**
+ * A team member takes tasks from the agent that owns it and can't delegate or ship, so a message typed while one is
+ * selected goes to its owner (up the chain to the Lead), and the view follows.
+ */
+async function routeToOwner() {
+  const start = sessionAgents.value.find((a) => a.id === selected.value?.agentId);
+  let target = start;
+  while (target?.kind === "subagent" && target.ownerAgentId !== undefined)
+    target = sessionAgents.value.find((a) => a.id === target!.ownerAgentId) ?? undefined;
+  if (!start || !target || target.id === start.id || !selected.value) return;
+  select({ ...selected.value, agentId: target.id });
+  await nextTick();
+  notify(`Sent to ${target.name || "the Lead"}: ${start.name || "team members"} take tasks from it`);
+}
 
 const mode = ref<WhenBusy>("followUp");
 const pending = ref(false);
@@ -83,6 +101,8 @@ async function send() {
   if (!content || pending.value || !handle) return;
   if (content.startsWith("/") && (await runCommand(content))) return;
   pending.value = true;
+  await routeToOwner();
+  const target = agentHandle.value ?? handle;
   const t = selected.value!;
   const key = `${t.deviceId}/${t.sessionId}/${t.agentId}`;
   let saved: { key: string; content: string; mode: string; requestId: string } | undefined;
@@ -98,7 +118,7 @@ async function send() {
     JSON.stringify({ key, content, mode: mode.value, requestId }),
   );
   await attempt(async () => {
-    await handle.send(content, mode.value, requestId);
+    await target.send(content, mode.value, requestId);
     sessionStorage.removeItem("anth.pending-send");
     ui.composer = "";
   });
