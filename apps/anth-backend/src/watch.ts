@@ -21,6 +21,8 @@ import type {
 } from "../../anth-sdk/src/api.js";
 import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
 import { runEffect } from "./jobs.js";
+import { existsSync, statSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { invalid, notFound } from "./errors.js";
 
 export const WINDOW_MS = 10 * 60_000;
@@ -258,6 +260,10 @@ export class Watcher {
       throw invalid("paths must be 1 to 20 paths starting with /");
     const path = str(b.path) ?? current?.path ?? ".";
     if (path.includes("\0")) throw invalid("Invalid path");
+    // A typo here (".site" for "site") would only show up later as a failed check or a broken incident agent.
+    const repo = resolvePath(this.host.sessionCwd(sessionId)!, path);
+    if (!existsSync(repo) || !statSync(repo).isDirectory())
+      throw invalid(`The repository folder ${repo} does not exist on this device. Use the folder name inside the session folder, or "." for the session folder itself.`);
     const vercel = b.vercel === undefined ? (current ? !!current.vercel : true) : b.vercel === true;
     const enabled = b.enabled === undefined ? (current ? !!current.enabled : true) : b.enabled === true;
     this.host.db
