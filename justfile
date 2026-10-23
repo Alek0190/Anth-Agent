@@ -21,6 +21,9 @@ mod test 'just/test'
 # App servers the ship job deploys to: setup, keygen, status
 mod server 'just/server'
 
+# Telegram alerts and calls: login, call
+mod telegram 'just/telegram'
+
 # Proactive demo: just proactive <command>
 mod proactive 'just/proactive'
 

@@ -74,7 +74,7 @@ import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from 
 import { createTeam, roleDef, ROLES, type TeamSettings } from "./team.js";
 import { Watcher } from "./watch.js";
 import { createIncidentExtension, incidentBrief, prepareWorktree } from "./incident.js";
-import { JOB_RUNS_DOC } from "../../anth-sdk/src/jobs.js";
+import { JOB_RUNS_DOC, type JobRun } from "../../anth-sdk/src/jobs.js";
 
 export const DURABLE_VERSION = "1.0.3";
 
@@ -1467,6 +1467,30 @@ export class Store {
     }, ctx);
     h.resume();
     return { taskId: taskId as number };
+  }
+
+  /** Every job run in every open session, with where it lives: what Telegram alerts are built from. */
+  async alertRuns(): Promise<{ session: SessionRow; conversationId: number; agent: string; run: JobRun }[]> {
+    const out: { session: SessionRow; conversationId: number; agent: string; run: JobRun }[] = [];
+    for (const [sessionId, opened] of this.opened) {
+      const session = this.catalog.prepare("SELECT * FROM sessions WHERE id=?").get(sessionId) as SessionRow | undefined;
+      if (!session) continue;
+      const names = this.names(sessionId);
+      for (const record of await this.scanAll(opened.harness)) {
+        const doc = await opened.harness.snapshot(JobRuns, record.id, ctx);
+        for (const run of Object.values(doc?.items ?? {}))
+          out.push({ session, conversationId: record.id as number, agent: names.get(record.id as number) ?? `#${record.id}`, run });
+      }
+    }
+    return out;
+  }
+
+  /** Approve or decline a pending run by where it lives (Telegram buttons). */
+  async approveRun(sessionId: string, conversationId: number, taskId: number, approved: boolean) {
+    const opened = this.opened.get(sessionId);
+    const c = opened && (await opened.harness.conversation(conversationId as ConversationId, ctx));
+    if (!c) throw notFound("That session or agent is gone");
+    return this.approveJob(c, taskId, approved);
   }
 
   async approveJob(c: Conversation, taskId: number, approved: unknown) {
