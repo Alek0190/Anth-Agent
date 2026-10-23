@@ -121,6 +121,12 @@ test("watch and fix: Vercel errors open one incident, its agent proves the fix, 
     // Watch setup is validated; the project shows as watched in the tree.
     await assert.rejects(() => client.putWatch("acme", "site", { sessionId: "nope", url: origin }));
     await assert.rejects(() => client.putWatch("acme", "site", { sessionId: s.id, url: "not-a-url" }));
+    // A typo in the repository folder is refused when saving, not found later as "spawn bash ENOENT".
+    await assert.rejects(() => client.putWatch("acme", "site", { sessionId: s.id, path: ".site", url: origin }), /\.site does not exist/);
+    // Only folders inside the session folder: no way out with .. or an absolute path, and a file is not a folder.
+    await assert.rejects(() => client.putWatch("acme", "site", { sessionId: s.id, path: "..", url: origin }), /must be inside the session folder/);
+    await assert.rejects(() => client.putWatch("acme", "site", { sessionId: s.id, path: "/tmp", url: origin }), /must be inside the session folder/);
+    await assert.rejects(() => client.putWatch("acme", "site", { sessionId: s.id, path: "site/app.js", url: origin }), /is a file, not a folder/);
     const watch = await client.putWatch("acme", "site", { sessionId: s.id, path: "site", url: origin, paths: ["/"] });
     assert.equal(watch.vercel, true);
     assert.match(watch.webhookPath, /^\/hooks\/acme\/site\/[\w-]{20,}$/);
