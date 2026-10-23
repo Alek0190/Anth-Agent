@@ -21,8 +21,8 @@ import type {
 } from "../../anth-sdk/src/api.js";
 import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
 import { runEffect } from "./jobs.js";
-import { existsSync, statSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative as relativePath, resolve as resolvePath, sep } from "node:path";
 import { invalid, notFound } from "./errors.js";
 
 export const WINDOW_MS = 10 * 60_000;
@@ -258,12 +258,19 @@ export class Watcher {
     const paths = b.paths ?? (current ? JSON.parse(current.paths) : ["/"]);
     if (!Array.isArray(paths) || !paths.length || paths.length > 20 || !paths.every((p) => typeof p === "string" && p.startsWith("/")))
       throw invalid("paths must be 1 to 20 paths starting with /");
-    const path = str(b.path) ?? current?.path ?? ".";
-    if (path.includes("\0")) throw invalid("Invalid path");
-    // A typo here (".site" for "site") would only show up later as a failed check or a broken incident agent.
-    const repo = resolvePath(this.host.sessionCwd(sessionId)!, path);
-    if (!existsSync(repo) || !statSync(repo).isDirectory())
+    const raw = str(b.path) ?? current?.path ?? ".";
+    if (raw.includes("\0")) throw invalid("Invalid path");
+    // The folder must exist and sit inside the session folder; it is stored relative to it, so the Vercel log reader
+    // and the incident agent use exactly the folder checked here. A typo (".site" for "site") is refused now instead
+    // of showing up later as a failed check or a broken incident agent.
+    const cwd = this.host.sessionCwd(sessionId)!;
+    const repo = resolvePath(cwd, raw);
+    if (!existsSync(repo))
       throw invalid(`The repository folder ${repo} does not exist on this device. Use the folder name inside the session folder, or "." for the session folder itself.`);
+    if (!statSync(repo).isDirectory()) throw invalid(`${repo} is a file, not a folder. Use the folder that holds the repository.`);
+    const path = relativePath(realpathSync(cwd), realpathSync(repo)) || ".";
+    if (path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path))
+      throw invalid(`The repository folder must be inside the session folder ${cwd}`);
     const vercel = b.vercel === undefined ? (current ? !!current.vercel : true) : b.vercel === true;
     const enabled = b.enabled === undefined ? (current ? !!current.enabled : true) : b.enabled === true;
     this.host.db

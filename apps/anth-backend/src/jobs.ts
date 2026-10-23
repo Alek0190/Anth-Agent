@@ -34,7 +34,7 @@ import type { SharedState } from "./shared-state.js";
 import { SHIP_DEFS, SHIP_HANDLERS } from "./ship.js";
 import type { TeamRoleId } from "../../anth-sdk/src/api.js";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 
 export const JobRuns = defineDoc<JobRunsDoc>({
@@ -859,6 +859,7 @@ export function runEffect(command: string, dir: string, secrets: Record<string, 
   return new Promise<{ code: number; out: string }>((done, fail) => {
     // Node reports a missing working folder as "spawn bash ENOENT"; say what is actually missing.
     if (!existsSync(dir)) return fail(Error(`The folder ${dir} does not exist`));
+    if (!statSync(dir).isDirectory()) return fail(Error(`${dir} is a file, not a folder`));
     const child = spawn("bash", ["-c", command], {
       cwd: dir,
       env: { ...base, GIT_TERMINAL_PROMPT: "0", CI: "1", ...secrets },
