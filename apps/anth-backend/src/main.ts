@@ -18,7 +18,7 @@ const store = await Store.open({
 });
 
 // Telegram alerts and approvals, when TELEGRAM_BOT_TOKEN is set (see docs/TELEGRAM.md).
-const alertSettings = alertsConfig(process.env, config.dataDir);
+const alertSettings = alertsConfig(process.env, config.dataDir, config.name);
 const alerts =
   alertSettings &&
   new Alerts(

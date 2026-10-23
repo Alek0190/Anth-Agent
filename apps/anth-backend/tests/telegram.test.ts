@@ -180,6 +180,13 @@ test("alerts: approvals with buttons, only your chat decides, decisions elsewher
   }
 });
 
+test("alerts: TELEGRAM_DEVICE keeps the bot on one device", () => {
+  const env = { TELEGRAM_BOT_TOKEN: "T0K", TELEGRAM_DEVICE: "hetzner" };
+  assert.equal(alertsConfig(env, "/tmp", "local"), undefined);
+  assert.ok(alertsConfig(env, "/tmp", "hetzner"));
+  assert.ok(alertsConfig({ TELEGRAM_BOT_TOKEN: "T0K" }, "/tmp", "local"));
+});
+
 test("alerts: setup mode tells you your chat id; an approval that waits too long rings once", async () => {
   const tg = await fakeTelegram("T0K");
   const dataDir = mkdtempSync(join(tmpdir(), "anth-tg-"));
