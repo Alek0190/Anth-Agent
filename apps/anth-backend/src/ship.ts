@@ -83,6 +83,31 @@ export function parseVerdict(report: string): "safe" | "owner" | "changes" | und
   return undefined;
 }
 
+/** Add the fix to a Vercel deploy failure we recognise; otherwise point at the deployment's own log. */
+export function explainVercel(message: string) {
+  if (/contributing access|hobby plan does not support collaboration|git author/i.test(message))
+    return `${message} Vercel blocked the build because the commit author is not your Vercel account. On the Hobby plan, set git config --global user.email to your Vercel account's email, then ship again.`;
+  return `${message} Open the deployment's Inspect link in the step output for Vercel's full build log.`;
+}
+
+/** Add the fix to a git push failure we recognise. */
+export function explainPush(message: string, repo: string) {
+  if (/write access to repository not granted|403/i.test(message))
+    return `${message} GITHUB_TOKEN can reach ${repo} but cannot write to it. Edit the fine-grained token: select ${repo} under Repository access and set Contents and Pull requests to Read and write, then ship again (no restart needed).`;
+  if (/repository not found|404/i.test(message))
+    return `${message} GITHUB_TOKEN cannot see ${repo}. Add the repository to the token's Repository access.`;
+  return message;
+}
+
+/** The remote's default branch (origin/HEAD), else main or master, whichever exists. */
+async function defaultBranch(p: Phase, dir: string) {
+  const head = (await p.shell(inDir(dir, "git symbolic-ref --quiet --short refs/remotes/origin/HEAD"))).out.trim();
+  if (head.startsWith("origin/")) return head.slice(7);
+  for (const name of ["main", "master"])
+    if ((await p.shell(inDir(dir, `git rev-parse --verify --quiet ${name}`))).code === 0) return name;
+  return "main";
+}
+
 /** owner/repo from a GitHub remote URL (https or ssh), or undefined for anything else. */
 export function githubRepo(remote: string) {
   const m = remote.trim().match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
@@ -197,17 +222,22 @@ const ship: Record<string, Handler> = {
     const dir = String(p.input.path);
     await p.exec(inDir(dir, "git rev-parse --is-inside-work-tree"), "git rev-parse --is-inside-work-tree");
     const current = (await p.exec(inDir(dir, "git rev-parse --abbrev-ref HEAD"), "git rev-parse --abbrev-ref HEAD")).trim();
-    const base = auto(p.input.base) ? (current.startsWith("anth/ship-") ? "main" : current) : String(p.input.base);
+    const base = auto(p.input.base) ? (current.startsWith("anth/ship-") ? await defaultBranch(p, dir) : current) : String(p.input.base);
     const branch = `anth/ship-${p.run.n}-${p.run.id}`;
     const title = auto(p.input.title) ? `Anth-Agent ship #${p.run.n}` : String(p.input.title);
     if (current !== branch) await p.exec(inDir(dir, `git checkout -B ${q(branch)}`), `git checkout -B ${branch}`);
     await p.exec(inDir(dir, "git add -A"), "git add -A");
     const staged = await p.shell(inDir(dir, "git diff --cached --quiet"));
     if (staged.code !== 0) {
-      // Commit as the repository's configured author, or as Anth-Agent when the repository has none.
-      const named = (await p.shell(inDir(dir, "git config user.name"))).out.trim();
-      const who = named ? "" : `-c user.name='Anth-Agent' -c user.email='agent@anthward.agency' `;
-      await p.exec(inDir(dir, `git ${who}commit -q -m ${q(title)}`), `git commit -m "${title}"`);
+      // Commit as the configured git author. Never invent one: Vercel's Hobby plan only builds commits whose author
+      // email belongs to the Vercel account, so a made-up author gets every deploy blocked.
+      const email = (await p.shell(inDir(dir, "git config user.email"))).out.trim();
+      if (!email)
+        throw Error(
+          'No git author is set on this device. Run git config --global user.name "Your Name" and git config --global user.email "you@example.com" ' +
+            "with the email of your Vercel account (Vercel Hobby only builds commits by the account owner), then ship again.",
+        );
+      await p.exec(inDir(dir, `git commit -q -m ${q(title)}`), `git commit -m "${title}"`);
     } else await p.note("Nothing new to commit");
     const exists = await p.shell(inDir(dir, `git rev-parse --verify --quiet ${q(base)}`));
     if (exists.code !== 0) throw Error(`Base branch ${base} does not exist. Set the base input.`);
@@ -271,12 +301,16 @@ const ship: Record<string, Handler> = {
 
   preview: async (p) => {
     const dir = String(p.input.path);
-    const out = await p.effect(`${vercel()} deploy --yes --token "$VERCEL_TOKEN"${scope()}`, {
-      label: "vercel deploy (preview)",
-      dir,
-      secrets: vercelSecrets("this device"),
-      timeoutSec: 1200,
-    });
+    const out = await p
+      .effect(`${vercel()} deploy --yes --token "$VERCEL_TOKEN"${scope()}`, {
+        label: "vercel deploy (preview)",
+        dir,
+        secrets: vercelSecrets("this device"),
+        timeoutSec: 1200,
+      })
+      .catch((e: Error) => {
+        throw Error(explainVercel(e.message));
+      });
     const url = lastUrl(out);
     if (!url) throw Error(`vercel deploy printed no URL: ${out.trim().split("\n").slice(-3).join(" ")}`);
     return { done: url, data: { previewUrl: url } };
@@ -303,12 +337,16 @@ const ship: Record<string, Handler> = {
     const token = env("GITHUB_TOKEN");
     if (!token) throw Error("GITHUB_TOKEN is not set on this device. Add it to .env and env_keys in anth-network.yaml.");
     const auth = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
-    await p.effect(`git -c http.extraHeader="$ANTH_GIT_AUTH" push -u origin ${q(branch)}`, {
-      label: `git push -u origin ${branch}`,
-      dir,
-      secrets: { ANTH_GIT_AUTH: auth },
-      timeoutSec: 300,
-    });
+    await p
+      .effect(`git -c http.extraHeader="$ANTH_GIT_AUTH" push -u origin ${q(branch)}`, {
+        label: `git push -u origin ${branch}`,
+        dir,
+        secrets: { ANTH_GIT_AUTH: auth },
+        timeoutSec: 300,
+      })
+      .catch((e: Error) => {
+        throw Error(explainPush(e.message, repo));
+      });
     const [owner] = repo.split("/");
     const pr = await p.step("command", `pull request ${branch} → ${p.data.base}`, async () => {
       const open = (await github(`/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}`)) as unknown as {

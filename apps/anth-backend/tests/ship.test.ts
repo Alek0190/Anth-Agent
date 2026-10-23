@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { join } from "node:path";
 import { AnthClient } from "../../anth-sdk/src/client.js";
 import type { JobRun, JobRunsDoc } from "../../anth-sdk/src/jobs.js";
-import { githubRepo, lastUrl, parseVerdict } from "../src/ship.js";
+import { explainPush, explainVercel, githubRepo, lastUrl, parseVerdict } from "../src/ship.js";
 import { bootServer, faux, newToken, tempStore, until } from "./helpers.js";
 
 test("ship helpers: verdicts, GitHub remotes, deployment URLs", () => {
@@ -20,6 +20,10 @@ test("ship helpers: verdicts, GitHub remotes, deployment URLs", () => {
   assert.equal(githubRepo("/tmp/remote.git"), undefined);
   assert.equal(lastUrl("Inspect: https://vercel.com/a/b\nhttps://site-abc.vercel.app\n"), "https://site-abc.vercel.app");
   assert.equal(lastUrl("nothing"), undefined);
+  assert.match(explainPush("Exit 128: remote: Write access to repository not granted.", "alek/site"), /Contents and Pull requests to Read and write/);
+  assert.match(explainPush("Exit 128: remote: Repository not found.", "alek/site"), /cannot see alek\/site/);
+  assert.match(explainVercel("Error: the commit author did not have contributing access"), /user.email to your Vercel account/);
+  assert.match(explainVercel("Error: Command \"npm run build\" exited with 1"), /Inspect link/);
 });
 
 /** Read a request body as JSON. */
