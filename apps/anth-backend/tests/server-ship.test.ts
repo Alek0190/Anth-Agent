@@ -81,6 +81,7 @@ SSH_ORIGINAL_COMMAND="$*" ANTH_DEPLOY_ROOT=${srv} ANTH_CADDY_RELOAD=true ANTH_UR
 `,
   );
   for (const f of [join(bin, "docker"), join(bin, "curl"), ssh]) chmodSync(f, 0o755);
+  /** Everything the fake ssh and docker were asked to do. */
   const calls = () => readFileSync(log, "utf8");
 
   // The project: a Dockerfile, an anth.json pointing at the server, and a GitHub-style origin.
@@ -124,7 +125,9 @@ SSH_ORIGINAL_COMMAND="$*" ANTH_DEPLOY_ROOT=${srv} ANTH_CADDY_RELOAD=true ANTH_UR
     const leak = await lead.send("!echo key=[$ANTH_DEPLOY_SSH_KEY]", "followUp", "leak", 30000);
     assert.match(leak.status === "done" ? leak.answer.text : "", /key=\[\]/);
 
+    /** The job run record for a task. */
     const runOf = async (id: number) => (await lead.doc<JobRunsDoc>("demo.job-runs")).value.items[String(id)] as JobRun;
+    /** Wait until a run reaches a status; fail fast if it failed. */
     const waitFor = (id: number, status: string) =>
       until(async () => {
         const r = await runOf(id);

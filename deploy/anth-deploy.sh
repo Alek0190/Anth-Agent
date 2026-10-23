@@ -22,7 +22,9 @@ RELOAD="${ANTH_CADDY_RELOAD:-caddy reload --config /etc/caddy/Caddyfile --adapte
 HEALTH_TRIES="${ANTH_HEALTH_TRIES:-60}"
 SCHEME="${ANTH_URL_SCHEME:-https}"
 
+# Print an error to stderr and stop.
 die() { echo "anth-deploy: $*" >&2; exit 1; }
+# Print progress to stderr (stdout is reserved for the URL the ship job reads).
 log() { echo "anth-deploy: $*" >&2; }
 
 # As a forced command, the requested command arrives in SSH_ORIGINAL_COMMAND; never eval it, only split it.
@@ -48,12 +50,14 @@ source "$dir/app.env"
 APP_PORT="${APP_PORT:-3000}"
 HEALTH_PATH="${HEALTH_PATH:-/}"
 DATA_DIR="${DATA_DIR:-/app/data}"
+# The Docker image tag for a commit of this app.
 image() { echo "anth-$app:$1"; }
 
 # One deploy at a time per app.
 exec 9>"$dir/.lock"
 flock -w 600 9 || die "another deploy of $app is still running"
 
+# Wait until the app answers HEALTH_PATH on a local port; fail after HEALTH_TRIES seconds.
 health() {
   local port="$1" i
   for ((i = 0; i < HEALTH_TRIES; i++)); do
@@ -75,6 +79,7 @@ start() {
     -v "$data:$DATA_DIR" "$tag" >/dev/null
 }
 
+# Write the app's Caddyfile for a production port and reload Caddy; on failure restore the old file.
 caddyfile() {
   local prod_port="$1"
   cat >"$dir/Caddyfile.new" <<EOF
@@ -102,8 +107,10 @@ EOF
 
 # The production slot that is live now (0 or 1) and the image it runs; empty before the first promote.
 current_slot() { [ -f "$dir/current" ] && cut -d' ' -f1 "$dir/current" || echo ""; }
+# The commit running in the live production slot, empty before the first promote.
 current_sha() { [ -f "$dir/current" ] && cut -d' ' -f2 "$dir/current" || echo ""; }
 
+# Start a commit's image on the idle slot, health-check it, switch Caddy, stop the old slot.
 promote() {
   local target="$1"
   docker image inspect "$(image "$target")" >/dev/null 2>&1 || die "no image for $target: deploy a preview of it first"

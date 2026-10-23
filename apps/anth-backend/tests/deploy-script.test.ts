@@ -59,7 +59,9 @@ esac
     if (withDockerfile) writeFileSync(join(src, "Dockerfile"), "FROM node:24-alpine\n");
     return spawnSync("tar", ["-c", "-C", src, "."]).stdout;
   };
+  /** Everything the fake docker and curl were asked to do. */
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
+  /** A file in the app folder, trimmed. */
   const file = (name: string) => readFileSync(join(app, name), "utf8").trim();
   return { root, app, run, tarball, calls, file, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }

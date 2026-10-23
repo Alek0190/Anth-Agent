@@ -277,6 +277,7 @@ async function github(path: string, init: { method?: string; body?: unknown } = 
 // ------------------------------------------------------------------ the ship job
 
 const ship: Record<string, Handler> = {
+  /** Check the folder is a clean git repo and make the release branch. */
   prepare: async (p) => {
     const dir = String(p.input.path);
     await p.exec(inDir(dir, "git rev-parse --is-inside-work-tree"), "git rev-parse --is-inside-work-tree");
@@ -308,6 +309,7 @@ const ship: Record<string, Handler> = {
     };
   },
 
+  /** Install and run the project's build and tests. */
   build: async (p) => {
     const dir = String(p.input.path);
     const raw = (await p.shell(inDir(dir, "cat package.json 2>/dev/null || true"))).out;
@@ -336,6 +338,7 @@ const ship: Record<string, Handler> = {
     return { done: ran.length ? `${ran.join(", ")} passed` : "No lint, typecheck, build or test scripts" };
   },
 
+  /** Ask the reviewer and security members; "changes requested" stops the ship. */
   review: async (p) => {
     if (!Number(p.data.ahead)) {
       await p.note("No new commits to review");
@@ -358,6 +361,7 @@ const ship: Record<string, Handler> = {
     };
   },
 
+  /** Deploy a preview: Vercel, or the committed tree to the app server's preview slot. */
   preview: async (p): Promise<Outcome> => {
     const dir = String(p.input.path);
     const target = await deployTarget(p, dir);
@@ -389,6 +393,7 @@ const ship: Record<string, Handler> = {
     return { done: url, data: { previewUrl: url } };
   },
 
+  /** Check that the preview answers over HTTP. */
   check: async (p) => {
     const dir = String(p.input.path);
     const path = await healthPath(p, dir);
@@ -396,6 +401,7 @@ const ship: Record<string, Handler> = {
     return { done: `Preview answers ${status} on ${path}`, data: { healthPath: path } };
   },
 
+  /** Push the branch and open (or reuse) the pull request. */
   pr: async (p) => {
     if (!Number(p.data.ahead)) {
       await p.note("No new commits: no pull request");
@@ -449,10 +455,12 @@ const ship: Record<string, Handler> = {
     return { done: pr.html_url, data: { prUrl: pr.html_url, prNumber: pr.number, repo } };
   },
 
+  /** Approval phases are handled by the job engine, never called. */
   approve: async () => {
     throw Error("approval phases run in the engine");
   },
 
+  /** Put the approved preview into production (Vercel promote, or anth-deploy promote by commit). */
   promote: async (p) => {
     const dir = String(p.input.path);
     const target = await deployTarget(p, dir);
@@ -477,6 +485,7 @@ const ship: Record<string, Handler> = {
     return { done: `${p.data.previewUrl} is production` };
   },
 
+  /** Check that production answers over HTTP and record the result. */
   verify: async (p) => {
     const dir = String(p.input.path);
     const url = await productionUrl(p, dir);
@@ -507,6 +516,7 @@ export function parseStatus(out: string): { current: string; previous: string } 
 }
 
 const rollback: Record<string, Handler> = {
+  /** Before approval, fix the release production goes back to (app server: the previous commit). */
   target: async (p) => {
     const target = await deployTarget(p, String(p.input.path));
     if (target.kind !== "server") return { done: "Vercel's previous production deployment" };
@@ -520,9 +530,11 @@ const rollback: Record<string, Handler> = {
     if (!previous) throw Error(`no previous production deployment of ${target.app} to roll back to`);
     return { done: `${current || "nothing"} → ${previous}`, data: { rollbackSha: previous } };
   },
+  /** Approval phases are handled by the job engine, never called. */
   approve: async () => {
     throw Error("approval phases run in the engine");
   },
+  /** Put the release chosen before approval back into production. */
   rollback: async (p) => {
     const target = await deployTarget(p, String(p.input.path));
     if (target.kind === "server") {
@@ -545,6 +557,7 @@ const rollback: Record<string, Handler> = {
     });
     return { done: "The previous production deployment is back" };
   },
+  /** Check that production answers over HTTP after the rollback. */
   verify: async (p) => {
     const dir = String(p.input.path);
     const url = await productionUrl(p, dir);

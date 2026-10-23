@@ -13,6 +13,7 @@
 #   6. opens ports 22, 80 and 443 when ufw is present
 set -euo pipefail
 
+# Print how to call this script and stop.
 usage() { echo "usage: server-setup.sh --app NAME --domains 'a.com, www.a.com' --preview-domain preview.a.com --base-port 18000 --pubkey 'ssh-ed25519 …' [--app-port 3000] [--health-path /] [--data-dir /app/data]" >&2; exit 1; }
 APP_PORT=3000 HEALTH_PATH=/ DATA_DIR=/app/data APP= DOMAINS= PREVIEW_DOMAIN= BASE_PORT= PUBKEY=
 while [ $# -gt 0 ]; do
