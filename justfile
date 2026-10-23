@@ -18,6 +18,9 @@ mod tui 'just/tui'
 # Unit, UI, device and e2e suites
 mod test 'just/test'
 
+# App servers the ship job deploys to: setup, keygen, status
+mod server 'just/server'
+
 # Proactive demo: just proactive <command>
 mod proactive 'just/proactive'
 
