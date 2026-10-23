@@ -54,6 +54,20 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 | `POST .../agents/:a/demo/jobs` | `{job, input?}` | `201 {taskId}`: a durable job run the conversation owns in the background, anchored by a `demo.job` entry |
 | `POST .../agents/:a/demo/jobs/:taskId/approval` | `{approved}` | `{ok}`; `409 conflict` when the run is not waiting |
 
+## Watch and fix
+
+One device watches a project's production. Every minute (`ANTH_WATCH_INTERVAL_MS`, `0` turns the timer off) it collects events, Jev judges each one (`normal`, `suspicious` or `incident` plus an impact score; rules take over when Jev is unreachable), and code applies the rule: three `incident` verdicts with one fingerprint within ten minutes, or two failed uptime checks, open one incident. An incident gets an incident agent in the watch session: a team Lead named `Incident #<n>`, working in a git worktree `<repo parent>/.anth-incidents/<repo>-inc-<n>` on branch `incident/inc-<n>` from the default branch. Its `submit_fix {test_command, summary}` tool proves the fix (the changed tests fail on the base branch and pass on the incident branch) and only then starts the `ship` job, which waits for your approval before production. A completed ship resolves the incident; a declined or failed one marks it `needs-you`.
+
+| Route | Body / query | Returns |
+|---|---|---|
+| `GET / PUT / DELETE /v1/projects/:client/:project/watch` | PUT `{sessionId, url, path?, paths?, vercel?, enabled?}` | `WatchInfo`: the session that holds the repository (`path` is the repository folder relative to it), the production `url`, the `paths` checked every tick, whether `vercel logs` is read (needs `VERCEL_TOKEN`), and `webhookPath` |
+| `POST /v1/projects/:client/:project/watch/tick` | | `{events, errors}`: collect, judge and apply the rule now |
+| `GET /v1/projects/:client/:project/watch/events` | `?limit=` | newest `WatchEvent`s with verdict, impact and incident |
+| `GET /v1/projects/:client/:project/incidents`, `GET /v1/incidents` | | `Incident[]`: status `fixing`, `shipping`, `resolved` or `needs-you`, worktree, branch, agent, ship run |
+| `POST /hooks/:client/:project/:secret` | any JSON object or array (Sentry webhooks, `{message, level, path, status}`) | `202 {accepted, new}`; no bearer token, the secret in `webhookPath` is the key; a wrong secret is `404` |
+
+Sources: `vercel-log` and `vercel-request` (`vercel logs runtime --query 'level:error OR level:fatal'` and `vercel logs requests --query 'httpStatus >= 500'` for production, since the last tick), `uptime` (each path: down, 5xx or slower than 8 s), and `webhook`. The project tree's `projects[].watch` reports `{enabled, openIncidents}` for badges.
+
 ## Agent tools
 
 Every agent gets the coding tools `read`, `write`, `edit` and `bash`, plus the playground tools `read_state`, `update_state`, `list_durable_jobs`, `run_durable_job`, `check_durable_job`, `search_history`, `ping_on_call_engineer`, `subagent`, `start_session` and `handoff`. A team Lead also gets `delegate`. `readOnly` removes the nine that write: `bash`, `write`, `edit`, `update_state`, `run_durable_job`, `ping_on_call_engineer`, `subagent`, `start_session` and `delegate`. `GET .../agents/:a` lists each tool with its replay policy and whether it is offered.

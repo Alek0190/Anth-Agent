@@ -19,6 +19,10 @@ const store = await Store.open({
 const app = express();
 app.disable("x-powered-by");
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
+// Events from other services (Sentry alerts, your app): no bearer token, the per-project secret in the path is the key.
+app.post("/hooks/:client/:project/:secret", express.json({ limit: "256kb" }), (req, res) =>
+  res.status(202).json(store.watcher.hook(String(req.params.client), String(req.params.project), String(req.params.secret), req.body)),
+);
 app.use("/v1", bearerAuth(config.token), express.json({ limit: "256kb" }), v1(store));
 app.use((_req, res) => res.status(404).json({ error: { code: "not_found", message: "Route not found" } }));
 app.use(errorMiddleware);

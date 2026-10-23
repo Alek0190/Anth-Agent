@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import {
   ArrowRightLeft,
+  Eye,
   Building2,
   Layers,
   Package,
@@ -141,6 +142,20 @@ const title = computed(() => {
     <template v-else-if="projectNode">
       <Package class="ico" :size="16" />
       <b class="name">{{ label }}</b>
+      <span
+        v-if="projectNode.project.watch?.openIncidents"
+        class="incident-badge"
+        :title="`${projectNode.project.watch.openIncidents} open incident(s)`"
+        >{{ projectNode.project.watch.openIncidents }} incident{{
+          projectNode.project.watch.openIncidents === 1 ? "" : "s"
+        }}</span
+      >
+      <Eye
+        v-else-if="projectNode.project.watch?.enabled"
+        class="ico watching"
+        :size="14"
+        aria-label="Watched"
+      />
       <span class="meta">{{ sessionCount }} session{{ sessionCount === 1 ? "" : "s" }}</span>
       <span class="acts" @click.stop>
         <button

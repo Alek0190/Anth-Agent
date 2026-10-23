@@ -2,7 +2,7 @@
 // headless browser. Covers the network tree (devices from anth-network.yaml), sessions via the directory browser,
 // streaming turns, every agent feature in the parity list, offline/recovery and narrow screens.
 //   npm run build && node tests/network-ui.mjs        (HEADED=1 to watch)
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +17,24 @@ const backendDir = resolve(app, "../anth-backend");
 const tmp = mkdtempSync(join(tmpdir(), "anth-net-ui-"));
 const work = join(tmp, "work");
 mkdirSync(join(work, "project-alpha"), { recursive: true });
+// project-alpha is a git repository, so an incident there gets its own worktree.
+for (const args of [
+  ["init", "-q", "-b", "main"],
+  [
+    "-c",
+    "user.name=T",
+    "-c",
+    "user.email=t@t.t",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "init",
+  ],
+])
+  execFileSync("git", args, { cwd: join(work, "project-alpha") });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const token = () => randomBytes(24).toString("hex");
 const freePort = () =>
@@ -605,7 +623,10 @@ try {
 
   // The agent team: on for project sessions; the Lead delegates and the member shows in the tree under it.
   await tab("Team");
-  await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   await expect(page.locator(".team-role")).toHaveCount(8);
   await page.getByLabel("Tester model").selectOption("echo");
   await expect(page.getByLabel("Tester model")).toHaveValue("echo");
@@ -618,8 +639,51 @@ try {
   ).toBeVisible();
   await page.screenshot({ path: "/tmp/anth-net-team.png" });
   await page.getByRole("switch", { name: "Lead a team" }).click();
-  await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
   pass("agent team: Team tab, model per role, a delegation shows the member in the tree");
+
+  // Watch and fix: watch the project from the Watch tab, then three webhook events with one cause open an incident.
+  await tab("Watch");
+  await page.getByLabel("Production URL").fill(base);
+  await page.getByLabel("Read Vercel logs").uncheck();
+  await page.getByRole("button", { name: "Start watching", exact: true }).click();
+  await expect(page.locator(".watch-form")).toContainText("Watching", { timeout: 10000 });
+  await page.getByRole("button", { name: "Check now" }).click();
+  await expect(
+    page.locator(".toast, [role=status]").filter({ hasText: "Checked" }).first(),
+  ).toBeVisible({ timeout: 15000 });
+  await expect(row("c/dental-co/p/booking-site").locator(".watching")).toBeVisible();
+  const webhook = (await page.locator(".webhook").textContent())?.trim();
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(webhook, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: `evt-${i}`,
+        message: "Checkout crashed: total is undefined",
+        level: "error",
+        path: "/checkout",
+      }),
+    });
+    if (res.status !== 202) throw Error(`webhook answered ${res.status}`);
+  }
+  await expect(row("c/dental-co/p/booking-site").locator(".incident-badge")).toContainText(
+    "1 incident",
+    { timeout: 20000 },
+  );
+  await page.getByRole("button", { name: "Check now" }).click();
+  const card = page.locator(".incident").first();
+  await expect(card).toContainText("Checkout crashed", { timeout: 15000 });
+  await expect(page.locator(".watch-events li.incident")).toHaveCount(3);
+  await page.screenshot({ path: "/tmp/anth-net-watch.png" });
+  await card.getByRole("button", { name: "Open incident agent" }).click();
+  await expect(page.locator(".tree-row.agent.sel")).toContainText("Incident #1");
+  pass(
+    "watch and fix: Watch tab setup, webhook events open an incident, its agent is one click away",
+  );
 
   expect(errors).toEqual([]);
   pass("no browser runtime errors");

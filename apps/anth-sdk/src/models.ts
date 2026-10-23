@@ -465,6 +465,8 @@ export function projectTree(devices: readonly NetworkDevice[]): TreeNode[] {
       entry.projects.set(slug, node);
     }
     if (summary && !node.project.createdAt) node.project = summary;
+    // The device that watches the project reports its incidents; keep that summary on the merged row.
+    if (summary?.watch) node.project = { ...node.project, watch: summary.watch };
     if (!node.deviceIds.includes(deviceId)) node.deviceIds.push(deviceId);
     if (online) onlineProjects.add(ref);
     return node;

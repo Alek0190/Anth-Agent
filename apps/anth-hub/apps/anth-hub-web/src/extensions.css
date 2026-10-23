@@ -124,3 +124,116 @@
 .team-model select {
   width: 100%;
 }
+
+/* The Watch tab: setup form, incidents and the event stream. */
+.watch-form {
+  display: grid;
+  gap: 10px;
+}
+.watch-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.watch-form label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.watch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.watch-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.watch-panel .meta {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.watch-panel .meta .err {
+  color: #ff8a80;
+}
+.watch-panel .webhook {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  word-break: break-all;
+  cursor: copy;
+}
+.watch-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 18px 0 0;
+  font-size: 15px;
+}
+.incident .incident-status {
+  font-size: 13px;
+  border: 1px solid #443738;
+  border-radius: 4px;
+  padding: 0 6px;
+}
+.incident.fixing,
+.incident.shipping,
+.incident.needs-you {
+  border-left-color: #ff8a80;
+}
+.incident.resolved {
+  border-left-color: #6fcf97;
+  opacity: 0.75;
+}
+.incident button {
+  margin-top: 8px;
+}
+.watch-events {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.watch-events li {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: #241819;
+}
+.watch-events .msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.watch-events .when,
+.watch-events .src {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+}
+.watch-events .verdict {
+  font-family: "IBM Plex Mono", monospace;
+  border-radius: 4px;
+  padding: 0 5px;
+  border: 1px solid #443738;
+}
+.watch-events .incident .verdict {
+  color: #ff9aa4;
+  border-color: #7a3d43;
+}
+.watch-events .suspicious .verdict {
+  color: #f2d48a;
+  border-color: #6a5a32;
+}
+.watch-events .normal .verdict {
+  color: #9fe0b5;
+  border-color: #3f5f4b;
+}

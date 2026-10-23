@@ -13,6 +13,7 @@ import type {
   ErrorCode,
   ForkBody,
   Frame,
+  Incident,
   Page,
   ProjectSummary,
   SendResult,
@@ -23,6 +24,9 @@ import type {
   UpdateTeamBody,
   UpsertClientBody,
   UpsertProjectBody,
+  UpsertWatchBody,
+  WatchEvent,
+  WatchInfo,
   WhenBusy,
   WireEntry,
 } from "./api.js";
@@ -165,6 +169,31 @@ export class AnthClient {
   /** Create the project (and its client when missing) or rename it; safe to repeat. */
   putProject(client: string, slug: string, body: UpsertProjectBody) {
     return this.request<ProjectSummary>("PUT", `/v1/projects/${enc(client)}/${enc(slug)}`, body);
+  }
+
+  // ------------------------------------------------------------ watch and fix
+  /** The watch on a project's production, or a not_found error when this device does not watch it. */
+  watch(client: string, slug: string) {
+    return this.request<WatchInfo>("GET", `/v1/projects/${enc(client)}/${enc(slug)}/watch`);
+  }
+  /** Start or change watching a project's production on this device. */
+  putWatch(client: string, slug: string, body: UpsertWatchBody) {
+    return this.request<WatchInfo>("PUT", `/v1/projects/${enc(client)}/${enc(slug)}/watch`, body);
+  }
+  deleteWatch(client: string, slug: string) {
+    return this.request<{ removed: string }>("DELETE", `/v1/projects/${enc(client)}/${enc(slug)}/watch`);
+  }
+  /** Collect, judge and apply the incident rule now instead of waiting for the next tick. */
+  watchTick(client: string, slug: string) {
+    return this.request<{ events: number; errors: string[] }>("POST", `/v1/projects/${enc(client)}/${enc(slug)}/watch/tick`, {}, { timeoutMs: 300_000 });
+  }
+  /** A project's newest watch events with Jev's verdicts. */
+  watchEvents(client: string, slug: string, limit = 100) {
+    return this.request<WatchEvent[]>("GET", `/v1/projects/${enc(client)}/${enc(slug)}/watch/events?limit=${limit}`);
+  }
+  /** A project's incidents, newest first; without arguments, every incident on the device. */
+  incidents(client?: string, slug?: string) {
+    return this.request<Incident[]>("GET", client && slug ? `/v1/projects/${enc(client)}/${enc(slug)}/incidents` : "/v1/incidents");
   }
 
   // ------------------------------------------------------------ sessions

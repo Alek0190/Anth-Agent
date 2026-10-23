@@ -714,3 +714,15 @@
   font-size: 14px;
   text-align: right;
 }
+
+.tree-row .incident-badge {
+  font-size: 12px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: #1a1012;
+  background: #ff8a80;
+  font-weight: 650;
+}
+.tree-row .ico.watching {
+  color: #6fcf97;
+}

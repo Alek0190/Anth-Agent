@@ -13,6 +13,7 @@ import {
   PanelLeftOpen,
   Puzzle,
   Users,
+  Eye,
 } from "lucide-vue-next";
 import { THINKING_LEVELS, type ThinkingLevel } from "@sdk/api";
 import type { StateChange } from "@sdk/app-state";
@@ -20,6 +21,7 @@ import StateEditor from "./StateEditor.vue";
 import TasksPanel from "./TasksPanel.vue";
 import ExtensionsPanel from "./ExtensionsPanel.vue";
 import TeamPanel from "./TeamPanel.vue";
+import WatchPanel from "./WatchPanel.vue";
 import ContextBar from "./ContextBar.vue";
 import { message } from "../client/hub";
 import { toolSignature } from "../client/signature";
@@ -59,6 +61,7 @@ const tabs = [
   { id: "state", label: "State", icon: Braces },
   { id: "tasks", label: "Tasks", icon: Activity },
   { id: "team", label: "Team", icon: Users },
+  { id: "watch", label: "Watch", icon: Eye },
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "extensions", label: "Extend", icon: Puzzle },
 ];
@@ -359,6 +362,7 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
         <TasksPanel v-if="ui.tab === 'tasks'" />
         <ExtensionsPanel v-if="ui.tab === 'extensions'" />
         <TeamPanel v-if="ui.tab === 'team'" />
+        <WatchPanel v-if="ui.tab === 'watch'" />
         <template v-if="ui.tab === 'tools'"
           ><div class="panel-heading">
             <h2>Tools</h2>

@@ -25,7 +25,12 @@ export function proxy(registry: NetworkRegistry, monitor: DeviceMonitor): Reques
     const path = req.originalUrl.startsWith(prefix)
       ? req.originalUrl.slice(prefix.length)
       : req.originalUrl;
-    if (/\/events(\?|$)/.test(path))
+    // Only the three stream routes: device, session and agent events. Other paths may end in /events (watch/events).
+    if (
+      /^\/v1\/(events|sessions\/[^/]+\/events|sessions\/[^/]+\/agents\/[^/]+\/events)(\?|$)/.test(
+        path,
+      )
+    )
       return void res.status(400).json(err("invalid", "Streams are served by /api/stream"));
     const hasBody = !["GET", "HEAD", "DELETE"].includes(req.method);
     const closed = new AbortController();

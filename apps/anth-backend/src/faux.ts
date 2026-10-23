@@ -7,6 +7,7 @@
 //   "check:[ <task id>|<job id>]" → one check_durable_job call
 //   "search: <words>" → one search_history call
 //   "page: <summary>" → one ping_on_call_engineer call
+//   "submitfix: <test command>" → one submit_fix call (incident agents)
 //   "delegate: <role> | <task>[ ;; <role> | <task>…]" → one delegate call per pair, all in the same turn
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
@@ -69,6 +70,8 @@ export function installFaux(models: MutableModels) {
       return call("check_durable_job", /^\d+$/.test(ref) ? { task_id: Number(ref) } : ref ? { job: ref } : {});
     }
     if (prompt.startsWith("search:")) return call("search_history", { query: prompt.slice(7).trim() });
+    if (prompt.startsWith("submitfix:"))
+      return call("submit_fix", { test_command: prompt.slice(10).trim(), summary: "Faux fix" });
     if (prompt.startsWith("delegate:")) {
       const calls = prompt
         .slice(9)
