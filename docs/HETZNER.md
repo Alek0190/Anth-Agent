@@ -128,6 +128,19 @@ ssh root@AGENT_IP 'ufw allow 80/tcp && ufw allow 443/tcp'
 
 The backend port 4780 stays closed to the internet: Caddy reaches it on 127.0.0.1. Add an **A** record `hooks` → agent box IP, and use `https://hooks.anthwebbuilder.com<webhookPath>` from the Watch tab.
 
+## Keep a site private until it has its own logins
+
+A demo with no accounts should not be open to the internet. Put the whole site, production and preview, behind one password:
+
+```bash
+just server lock root@APP_IP anthwebbuilder            # asks for a password (user: anthward)
+just server unlock root@APP_IP anthwebbuilder          # open it again
+```
+
+The browser asks once for user `anthward` and the password. Only a bcrypt hash is stored on the server, and the password stays on through every deploy and rollback.
+
+`/anth-health` stays open, so Anth-Agent can still check the site: the ship's preview and production checks use it on app servers, and **Watch** should check it too (Watch → paths: `/anth-health`). It answers with the app's health path (`--health-path`, default `/`), so make sure that page shows nothing private.
+
 ## Day to day
 
 - **Ship:** ask the Lead, or Tasks → Ship. Preview at `https://preview.anthwebbuilder.com`, a pull request on GitHub, then **Approve production**.

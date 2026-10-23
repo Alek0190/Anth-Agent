@@ -10,6 +10,10 @@
 #                          old slot. Zero downtime; the old slot's image stays for rollback
 #   rollback <app>         promote the previous production image again
 #   status   <app>         print the current and previous production images
+#   refresh  <app>         rewrite the app's Caddyfile for the live slot (after its password changed)
+#
+# A password (BASIC_AUTH_USER and BASIC_AUTH_HASH in app.env, set by `just server lock`) protects production and
+# preview. /anth-health stays open for Anth-Agent's checks: it answers with the app's HEALTH_PATH, nothing else.
 #
 # Per app, /srv/anth/<app>/app.env (written by server-setup.sh) holds DOMAINS, PREVIEW_DOMAIN, BASE_PORT (production
 # slots BASE_PORT and BASE_PORT+1, preview BASE_PORT+2), APP_PORT (the port inside the container), HEALTH_PATH and
@@ -38,7 +42,7 @@ fi
 cmd="${1:-}"
 app="${2:-}"
 sha="${3:-}"
-[[ "$cmd" =~ ^(preview|promote|rollback|status)$ ]] || die "usage: preview <app> <sha> | promote <app> <sha> | rollback <app> | status <app>"
+[[ "$cmd" =~ ^(preview|promote|rollback|status|refresh)$ ]] || die "usage: preview <app> <sha> | promote <app> <sha> | rollback <app> | status <app> | refresh <app>"
 [[ "$app" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die "invalid app name: $app"
 if [[ "$cmd" =~ ^(preview|promote)$ ]]; then [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]] || die "invalid commit: $sha"; fi
 
@@ -79,21 +83,36 @@ start() {
     -v "$data:$DATA_DIR" "$tag" >/dev/null
 }
 
+# One site block: /anth-health always open (it serves HEALTH_PATH), everything else behind the password when one is set.
+site() {
+  local domains="$1" port="$2" extra="$3"
+  echo "$domains {"
+  echo "	encode gzip"
+  [ -n "$extra" ] && echo "	$extra"
+  echo "	handle /anth-health {"
+  echo "		rewrite * $HEALTH_PATH"
+  echo "		reverse_proxy 127.0.0.1:$port"
+  echo "	}"
+  echo "	handle {"
+  if [ -n "${BASIC_AUTH_USER:-}" ] && [ -n "${BASIC_AUTH_HASH:-}" ]; then
+    echo "		basicauth {"
+    echo "			$BASIC_AUTH_USER $BASIC_AUTH_HASH"
+    echo "		}"
+  fi
+  echo "		reverse_proxy 127.0.0.1:$port"
+  echo "	}"
+  echo "}"
+}
+
 # Write the app's Caddyfile for a production port and reload Caddy; on failure restore the old file.
 caddyfile() {
   local prod_port="$1"
-  cat >"$dir/Caddyfile.new" <<EOF
-# Written by anth-deploy. Production on 127.0.0.1:$prod_port, preview on 127.0.0.1:$((BASE_PORT + 2)).
-$DOMAINS {
-	encode gzip
-	reverse_proxy 127.0.0.1:$prod_port
-}
-
-$PREVIEW_DOMAIN {
-	header X-Robots-Tag "noindex, nofollow"
-	reverse_proxy 127.0.0.1:$((BASE_PORT + 2))
-}
-EOF
+  {
+    echo "# Written by anth-deploy. Production on 127.0.0.1:$prod_port, preview on 127.0.0.1:$((BASE_PORT + 2))."
+    site "$DOMAINS" "$prod_port" ""
+    echo
+    site "$PREVIEW_DOMAIN" "$((BASE_PORT + 2))" 'header X-Robots-Tag "noindex, nofollow"'
+  } >"$dir/Caddyfile.new"
   chmod 0644 "$dir/Caddyfile.new"
   # Keep the live file: if Caddy rejects the new one, put it back so the file always matches what is served.
   [ -f "$dir/Caddyfile" ] && cp -p "$dir/Caddyfile" "$dir/Caddyfile.bak"
@@ -162,6 +181,11 @@ case "$cmd" in
   rollback)
     [ -f "$dir/previous" ] || die "no previous production deployment to roll back to"
     promote "$(cut -d' ' -f2 "$dir/previous")"
+    ;;
+  refresh)
+    [ -n "$(current_slot)" ] || die "$app has no production deployment yet; the password applies from the first promote"
+    caddyfile $((BASE_PORT + $(current_slot))) || die "caddy reload failed; the Caddyfile is unchanged"
+    log "Caddyfile refreshed${BASIC_AUTH_USER:+ (password on for $BASIC_AUTH_USER)}"
     ;;
   status)
     echo "current: $(current_sha) (slot $(current_slot))"

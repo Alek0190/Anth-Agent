@@ -151,6 +151,8 @@ SSH_ORIGINAL_COMMAND="$*" ANTH_DEPLOY_ROOT=${srv} ANTH_CADDY_RELOAD=true ANTH_UR
     assert.equal(readFileSync(join(srv, "site", "current"), "utf8").trim(), `0 ${sha}`);
     assert.match(readFileSync(join(srv, "site", "Caddyfile"), "utf8"), /reverse_proxy 127\.0\.0\.1:18000/);
     assert.match((await runOf(taskId)).result ?? "", /\/prod answers 200/);
+    // Checks on an app server go to /anth-health, which stays open when the site has a password.
+    assert.equal((await runOf(taskId)).phases.find((p) => p.id === "check")?.summary, "Preview answers 200 on /anth-health");
 
     // With only one release there is nothing to roll back to: the job says so before asking for approval.
     const none = await lead.demo<{ taskId: number }>("jobs", { job: "rollback", input: { path: "site" } });
