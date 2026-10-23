@@ -354,7 +354,9 @@ const ship: Record<string, Handler> = {
     const stat = await p.exec(inDir(dir, `git diff --stat ${q(base)}...HEAD | tail -1`), `git diff --stat ${base}...HEAD`);
     const ask = (what: string) =>
       `${what} the change on branch ${p.data.branch} against ${base}${where}. Run \`git diff ${base}...HEAD\` and read the files it touches. ` +
-      `It is about to be deployed as a preview and, after the owner approves, to production.`;
+      `It is about to be deployed as a preview and, after the owner approves, to production. ` +
+      `First read AGENTS.md${where} if it exists: risks it lists as accepted and decisions it records are known, so ` +
+      `mention them at most in one line and never request changes for them. Judge this change, not the whole app.`;
     const review = await p.member("reviewer", ask("Review"));
     const security = await p.member("security", ask("Check the security of"));
     const verdict = parseVerdict(review);

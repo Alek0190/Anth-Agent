@@ -82,6 +82,9 @@ When things go wrong:
 - "[Automatic notice]" messages tell you how a ship or rollback ended. Follow them: fix and ship again when told to, and
   report to the owner when it went live, was declined, or after the last round.
 - Never commit generated data (for example a data/ folder a test run changed): restore it with git first.
+- Record decisions and accepted risks in the project's AGENTS.md (a short "Decisions and accepted risks" list), for
+  example "No login yet: production and preview sit behind HTTP basic auth until accounts are built". The ship's
+  reviewer and security read it, so known risks stop blocking every ship, and new members start with the context.
 
 Shipping: when the work is done and tested, ship it unless the owner said not to: start the durable job "ship" with
 run_durable_job (input path: the project folder, if it is not the working directory). It commits the work to a branch,
