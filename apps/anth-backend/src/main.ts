@@ -7,6 +7,7 @@ import { Store } from "./store.js";
 import { bearerAuth } from "./auth.js";
 import { errorMiddleware } from "./errors.js";
 import { v1 } from "./routes.js";
+import { Alerts, alertsConfig } from "./telegram.js";
 
 const config = loadConfig();
 const store = await Store.open({
@@ -15,6 +16,22 @@ const store = await Store.open({
   name: config.name,
   provider: config.provider,
 });
+
+// Telegram alerts and approvals, when TELEGRAM_BOT_TOKEN is set (see docs/TELEGRAM.md).
+const alertSettings = alertsConfig(process.env, config.dataDir);
+const alerts =
+  alertSettings &&
+  new Alerts(
+    {
+      name: config.name,
+      alertRuns: () => store.alertRuns(),
+      approveRun: (s, c, t, a) => store.approveRun(s, c, t, a),
+      incidents: () => store.watcher.incidents(),
+      subscribe: (fn) => store.subscribe(fn),
+    },
+    alertSettings,
+  );
+alerts?.start();
 
 const app = express();
 app.disable("x-powered-by");
@@ -44,6 +61,7 @@ const shutdown = async () => {
   closing = true;
   server.close();
   server.closeAllConnections();
+  await alerts?.stop();
   await store.close();
   process.exit(0);
 };
