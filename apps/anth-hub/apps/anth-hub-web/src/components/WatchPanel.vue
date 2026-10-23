@@ -23,28 +23,57 @@ const info = shallowRef<WatchInfo | null>();
 const events = shallowRef<WatchEvent[]>([]);
 const incidents = shallowRef<Incident[]>([]);
 const busy = ref(false);
-const form = ref({ url: "", paths: "/", path: ".", vercel: true });
+const blank = () => ({ url: "", paths: "/", path: ".", vercel: true });
+const form = ref(blank());
+
+/** Forget everything shown for another project, so its incidents or URL never appear under this one. */
+let shown: string | undefined;
+let filled: string | undefined;
+function resetFor(key: string | undefined) {
+  if (key === shown) return;
+  shown = key;
+  filled = undefined;
+  info.value = undefined;
+  events.value = [];
+  incidents.value = [];
+  form.value = blank();
+}
 
 /** Load the watch, its events and incidents for the selected project. */
 async function load() {
   const id = deviceId.value;
+  const key = id && project.value ? `${id}:${project.value}` : undefined;
+  resetFor(key);
   if (!id || !parts.value || !online.value) return void (info.value = undefined);
   const client = deviceClient(id);
   const [c, p] = parts.value;
+  let next: WatchInfo | null;
   try {
-    info.value = await client.watch(c, p);
+    next = await client.watch(c, p);
   } catch (e) {
-    if (isAnthError(e) && e.code === "not_found") info.value = null;
-    else return;
+    if (!(isAnthError(e) && e.code === "not_found")) return;
+    next = null;
+  }
+  // The selection may have moved on while this request was in flight.
+  if (key !== shown) return;
+  info.value = next;
+  if (!next) {
+    events.value = [];
+    incidents.value = [];
+    return;
   }
   if (info.value) {
-    form.value = {
-      url: info.value.url,
-      paths: info.value.paths.join(", "),
-      path: info.value.path,
-      vercel: info.value.vercel,
-    };
+    // Fill the form once per project: the 15-second refresh must not overwrite what you are typing.
+    if (filled !== key)
+      form.value = {
+        url: info.value.url,
+        paths: info.value.paths.join(", "),
+        path: info.value.path,
+        vercel: info.value.vercel,
+      };
+    filled = key;
     const [e, i] = await Promise.allSettled([client.watchEvents(c, p, 40), client.incidents(c, p)]);
+    if (key !== shown) return;
     if (e.status === "fulfilled") events.value = e.value;
     if (i.status === "fulfilled") incidents.value = i.value;
   }

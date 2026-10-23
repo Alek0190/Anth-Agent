@@ -97,7 +97,8 @@ export function fingerprint(e: Pick<WatchEvent, "source" | "message" | "path" | 
 
 /** Rules for when Jev is offline or unreachable: failures are incidents, warnings suspicious, the rest normal. */
 export function judgeOffline(e: WatchEvent): { verdict: WatchVerdict; impact: number } {
-  if (e.source === "uptime") return { verdict: "incident", impact: 0.9 };
+  // A slow page is worth a look; a page that is down or failing is an incident.
+  if (e.source === "uptime") return /^warn/i.test(e.level ?? "") ? { verdict: "suspicious", impact: 0.3 } : { verdict: "incident", impact: 0.9 };
   if (e.status !== undefined && e.status >= 500) return { verdict: "incident", impact: 0.7 };
   if (/^(error|fatal|critical)$/i.test(e.level ?? "")) return { verdict: "incident", impact: 0.6 };
   if (/^warn/i.test(e.level ?? "") || (e.status !== undefined && e.status >= 400)) return { verdict: "suspicious", impact: 0.2 };
@@ -471,9 +472,14 @@ export class Watcher {
   /** Open an incident for each fingerprint that crossed the threshold, or attach new events to its open incident. */
   private async apply(project: string) {
     const since = Date.now() - WINDOW_MS;
+    // Only events no incident has claimed, and only ones newer than the last resolved incident with that fingerprint:
+    // errors from before a fix went live (or reported late) must not reopen a bug that is already fixed.
+    const fresh = `project=? AND fingerprint=? AND verdict='incident' AND incident IS NULL AND at>=? AND at > COALESCE((SELECT MAX(updatedAt) FROM incidents i WHERE i.project=watch_events.project AND i.fingerprint=watch_events.fingerprint AND i.status='resolved'), 0)`;
     const groups = this.host.db
       .prepare(
-        "SELECT fingerprint, MIN(source) AS source, COUNT(*) AS n FROM watch_events WHERE project=? AND verdict='incident' AND at>=? GROUP BY fingerprint",
+        `SELECT fingerprint, MIN(source) AS source, COUNT(*) AS n FROM watch_events WHERE project=? AND verdict='incident' AND incident IS NULL AND at>=?
+         AND at > COALESCE((SELECT MAX(updatedAt) FROM incidents i WHERE i.project=watch_events.project AND i.fingerprint=watch_events.fingerprint AND i.status='resolved'), 0)
+         GROUP BY fingerprint`,
       )
       .all(project, since) as { fingerprint: string; source: string; n: number }[];
     for (const g of groups) {
@@ -490,9 +496,9 @@ export class Watcher {
       if (g.n < (g.source === "uptime" ? UPTIME_THRESHOLD : THRESHOLD)) continue;
       const r = this.row(project);
       if (!r) return;
-      const samples = this.host.db
-        .prepare("SELECT * FROM watch_events WHERE project=? AND fingerprint=? AND verdict='incident' AND at>=? ORDER BY at")
-        .all(project, g.fingerprint, since) as unknown as WatchEvent[];
+      const samples = (
+        this.host.db.prepare(`SELECT * FROM watch_events WHERE ${fresh} ORDER BY at`).all(project, g.fingerprint, since) as Record<string, unknown>[]
+      ).map(toEvent);
       const now = Date.now();
       const id = Number(
         this.host.db
@@ -500,9 +506,7 @@ export class Watcher {
           .run(project, g.fingerprint, samples[0].message.split("\n")[0].slice(0, 120), "fixing", now, now, r.sessionId, samples.length)
           .lastInsertRowid,
       );
-      this.host.db
-        .prepare("UPDATE watch_events SET incident=? WHERE project=? AND fingerprint=? AND verdict='incident' AND at>=?")
-        .run(id, project, g.fingerprint, since);
+      this.host.db.prepare(`UPDATE watch_events SET incident=? WHERE ${fresh}`).run(id, project, g.fingerprint, since);
       this.host.notify();
       try {
         await this.host.openIncident(this.incident(id)!, samples);

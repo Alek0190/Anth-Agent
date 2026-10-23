@@ -34,6 +34,16 @@ export async function defaultBranch(repo: string) {
   return "main";
 }
 
+/**
+ * The freshest commit of the base branch: fetch it, then use origin/<base>. A local branch can be days behind (a pull
+ * request merged on GitHub and never pulled), and fixing or proving against it would test old code. Falls back to the
+ * local branch only when the remote cannot be reached.
+ */
+export async function baseRef(repo: string, base: string) {
+  await run(`git fetch --quiet origin ${q(base)}`, repo, 120);
+  return (await run(`git rev-parse --verify --quiet ${q(`origin/${base}`)}`, repo)).code === 0 ? `origin/${base}` : base;
+}
+
 /** Create (or find) the incident's worktree next to the repository: <parent>/.anth-incidents/<repo>-inc-<id>. */
 export async function prepareWorktree(repo: string, id: number) {
   const base = await defaultBranch(repo);
@@ -45,11 +55,10 @@ export async function prepareWorktree(repo: string, id: number) {
   );
   if (!exists) {
     await mkdir(dirname(worktree), { recursive: true });
-    // Refresh the base when the remote is reachable; a stale or missing remote must not stop the incident.
-    await run(`git fetch --quiet origin ${q(base)}`, repo, 120);
+    const from = await baseRef(repo, base);
     const branchExists = (await run(`git rev-parse --verify --quiet ${q(branch)}`, repo)).code === 0;
     const r = await run(
-      branchExists ? `git worktree add ${q(worktree)} ${q(branch)}` : `git worktree add -b ${q(branch)} ${q(worktree)} ${q(base)}`,
+      branchExists ? `git worktree add ${q(worktree)} ${q(branch)}` : `git worktree add --no-track -b ${q(branch)} ${q(worktree)} ${q(from)}`,
       repo,
     );
     if (r.code !== 0) throw Error(`git worktree add failed: ${r.out.trim().slice(-300)}`);
@@ -130,9 +139,11 @@ export function createIncidentExtension(host: IncidentHost) {
       if (done?.applied) return { content: [{ type: "text", text: `Already shipping as durable task #${done.taskId}.` }] };
       const wt = incident.worktree;
       const repo = (await run("git rev-parse --path-format=absolute --git-common-dir", wt)).out.trim().replace(/\/\.git$/, "");
+      // Compare and prove against the latest base on the remote, not a local branch that may be behind.
+      const ref = await baseRef(repo, incident.base);
       const changed = new Set(
         [
-          ...(await run(`git diff --name-only ${q(incident.base)}`, wt)).out.split("\n"),
+          ...(await run(`git diff --name-only ${q(ref)}`, wt)).out.split("\n"),
           ...(await run("git ls-files --others --exclude-standard", wt)).out.split("\n"),
         ]
           .map((f) => f.trim())
@@ -143,7 +154,7 @@ export function createIncidentExtension(host: IncidentHost) {
       if (!tests.length) throw Error("No test file changed. Add a regression test (a *.test.* or *.spec.* file, or one under test/) that fails without the fix.");
       if (!code.length) throw Error("Only tests changed. The fix itself is missing.");
       api.output(`Changed: ${code.length} code file(s), ${tests.length} test file(s)\nRunning the test on ${incident.base}…\n`);
-      const before = await runOnBase(repo, wt, incident.base, tests, args.test_command);
+      const before = await runOnBase(repo, wt, ref, tests, args.test_command);
       if (before.code === 0)
         throw Error(`The test passes on ${incident.base} too, so it does not prove the fix. Make it fail without the fix.\n${before.out.trim().slice(-600)}`);
       api.output(`Fails on ${incident.base} as it should. Running it on ${incident.branch}…\n`);

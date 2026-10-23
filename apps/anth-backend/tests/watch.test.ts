@@ -27,7 +27,8 @@ test("watch helpers: Vercel log lines, webhook bodies, fingerprints, offline rul
   const a = fingerprint({ source: "vercel-log", message: "TypeError at line 42 for order 123", path: "/api/order/123" });
   const b = fingerprint({ source: "vercel-log", message: "TypeError at line 42 for order 456", path: "/api/order/456" });
   assert.equal(a, b);
-  assert.equal(judgeOffline({ id: "x", source: "uptime", at: 0, message: "down", fingerprint: "f" }).verdict, "incident");
+  assert.equal(judgeOffline({ id: "x", source: "uptime", at: 0, level: "error", message: "down", fingerprint: "f" }).verdict, "incident");
+  assert.equal(judgeOffline({ id: "x", source: "uptime", at: 0, level: "warning", message: "slow", fingerprint: "f" }).verdict, "suspicious");
   assert.equal(judgeOffline({ id: "x", source: "vercel-log", at: 0, level: "info", message: "ok", fingerprint: "f" }).verdict, "normal");
 });
 
@@ -92,6 +93,12 @@ test("watch and fix: Vercel errors open one incident, its agent proves the fix, 
   git(repo, "remote", "add", "origin", "https://github.com/acme/site.git");
   git(repo, "config", `url.${remote}.pushInsteadOf`, "https://github.com/acme/site.git");
   git(repo, "push", "-q", "origin", "main");
+  // The local main falls behind: a later commit is on the remote only (a pull request merged on GitHub, not pulled).
+  writeFileSync(join(repo, "version.txt"), "2\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-qm", "v2");
+  git(repo, "push", "-q", "origin", "main");
+  git(repo, "reset", "-q", "--hard", "HEAD~1");
 
   const server = await bootServer({
     home: join(t.root, "home"),
@@ -148,6 +155,7 @@ test("watch and fix: Vercel errors open one incident, its agent proves the fix, 
     const worktree = join(t.work, ".anth-incidents", "site-inc-1");
     assert.equal(incident.worktree, worktree);
     assert.equal(git(worktree, "rev-parse", "--abbrev-ref", "HEAD"), "incident/inc-1");
+    assert.equal(existsSync(join(worktree, "version.txt")), true, "the worktree starts from origin/main, not the stale local main");
     const agent = (await client.session(s.id).agents()).find((a) => a.name === "Incident #1");
     assert.equal(agent?.id, incident.conversationId);
     const tools = (await client.agent(s.id, agent!.id).get()).tools.filter((t) => t.offered).map((t) => t.name);
@@ -214,6 +222,19 @@ test("watch and fix: Vercel errors open one incident, its agent proves the fix, 
     // The next tick sees the completed ship and resolves the incident.
     await client.watchTick("acme", "site");
     assert.equal((await client.incidents("acme", "site")).find((i) => i.id === 1)?.status, "resolved");
+
+    // The errors from before the fix are still inside the window: they must not reopen the bug as a new incident.
+    const before = (await client.incidents("acme", "site")).length;
+    await client.watchTick("acme", "site");
+    await client.watchTick("acme", "site");
+    assert.equal((await client.incidents("acme", "site")).length, before, "no duplicate incident after the fix");
+    // A late-reported error from before the fix is ignored too; three fresh ones after it would open a new incident.
+    writeFileSync(
+      logs,
+      JSON.stringify({ type: "log", data: { id: "late", timestamp: now, level: "error", message: "TypeError: Cannot read properties of undefined (reading 'length') at app.js:1", requestPath: "/api/checkout" } }) + "\n",
+    );
+    await client.watchTick("acme", "site");
+    assert.equal((await client.incidents("acme", "site")).length, before);
   } finally {
     await server.stop();
     site.close();
