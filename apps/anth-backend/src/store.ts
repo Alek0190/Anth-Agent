@@ -21,8 +21,10 @@ import type {
   ThinkingLevel,
   UsageTotals,
   WhenBusy,
+  Incident,
   ProjectSummary,
   TeamInfo,
+  WatchEvent,
   TeamRoleId,
   UpdateSessionBody,
   UpdateTeamBody,
@@ -70,6 +72,8 @@ import { createPlayground, Workspace, type SpawnSession } from "./extensions.js"
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
 import { createTeam, roleDef, ROLES, type TeamSettings } from "./team.js";
+import { Watcher } from "./watch.js";
+import { createIncidentExtension, incidentBrief, prepareWorktree } from "./incident.js";
 import { JOB_RUNS_DOC } from "../../anth-sdk/src/jobs.js";
 
 export const DURABLE_VERSION = "1.0.3";
@@ -147,6 +151,7 @@ type Opened = {
   jobs: Jobs;
   addons: Addons;
   team: ReturnType<typeof createTeam>;
+  incident: ReturnType<typeof createIncidentExtension>;
 };
 type Resolved = { row: SessionRow; h: Harness; c: Conversation };
 
@@ -175,6 +180,8 @@ export class Store {
   private listeners = new Set<() => void>();
   /** Saved thresholds per session; null when the session uses the defaults for its model. */
   private compactions = new Map<string, Partial<CompactionSettings> | null>();
+  /** Watch and fix: production signals, Jev triage and incidents for the projects this device watches. */
+  readonly watcher: Watcher;
   /** Model overrides per team role, per session. */
   private teams = new Map<string, TeamSettings["models"]>();
   /** Task labels never change once known: tool names of pi.tool tasks, job titles of job runs. */
@@ -236,6 +243,19 @@ export class Store {
     this.uid = uid?.value ?? randomUUID();
     if (!uid) this.catalog.prepare("INSERT INTO meta(key,value) VALUES('device_uid',?)").run(this.uid);
     this.catalog.prepare("DELETE FROM requests WHERE createdAt < ?").run(Date.now() - 24 * 3600_000);
+    this.watcher = new Watcher({
+      db: this.catalog,
+      offline: options.provider === "faux",
+      sessionCwd: (id) => (this.catalog.prepare("SELECT cwd FROM sessions WHERE id=?").get(id) as { cwd: string } | undefined)?.cwd,
+      openIncident: (incident, samples) => this.openIncident(incident, samples),
+      shipStatus: async (incident) => {
+        const opened = this.opened.get(incident.sessionId);
+        if (!opened || incident.conversationId === undefined || incident.shipTaskId === undefined) return undefined;
+        const doc = await opened.harness.snapshot(JobRuns, incident.conversationId as ConversationId, ctx);
+        return doc?.items[String(incident.shipTaskId)]?.status;
+      },
+      notify: () => this.notify(),
+    });
   }
 
   static async open(options: StoreOptions) {
@@ -256,6 +276,7 @@ export class Store {
       if (!(await store.shared.initialized()))
         await store.shared.initialize({ goal: "Explore durable agents", counter: 0, notes: [] });
       store.modelList = await store.loadModels();
+      store.watcher.start(Number(process.env.ANTH_WATCH_INTERVAL_MS ?? 60_000));
       for (const { harness } of store.opened.values()) harness.resume();
       return store;
     } catch (e) {
@@ -526,9 +547,56 @@ export class Store {
 
   /** Every project on this device, grouped by client and sorted by name. */
   projects(): ProjectSummary[] {
-    return this.catalog
+    const rows = this.catalog
       .prepare("SELECT client,slug,name,createdAt FROM projects ORDER BY client, name COLLATE NOCASE")
       .all() as unknown as ProjectSummary[];
+    return rows.map((p) => {
+      const watch = this.watcher.summary(`${p.client}/${p.slug}`);
+      return watch ? { ...p, watch } : p;
+    });
+  }
+
+  // ------------------------------------------------------------ incidents
+
+  /**
+   * Turn a new incident into an incident agent: a worktree on incident/inc-<n> from the default branch, a team Lead
+   * conversation working in it, and the brief. Every step can be repeated: the worktree and conversation are reused,
+   * and the brief's requestId makes a second submission a no-op.
+   */
+  async openIncident(incident: Incident, samples: WatchEvent[]) {
+    const row = this.row(incident.sessionId);
+    const opened = this.opened.get(row.id);
+    if (!opened) throw Error(this.errors.get(row.id) ?? `Session ${row.name} is not open`);
+    const watch = this.watcher.get(incident.project);
+    const repo = resolve(row.cwd, watch.path);
+    const wt = await prepareWorktree(repo, incident.id);
+    this.watcher.updateIncident(incident.id, wt);
+    let conversationId = this.watcher.incident(incident.id)?.conversationId;
+    const h = opened.harness;
+    if (conversationId === undefined) {
+      const root = await (await h.root(ctx)).agent(ctx);
+      const extensions = [...root.extensions.filter((e) => e.name !== "team"), opened.team.lead, opened.incident];
+      const c = await h.createConversation(
+        {
+          ownership: { kind: "ownerless" },
+          agent: { model: root.model, cwd: wt.worktree, thinkingLevel: root.thinkingLevel },
+        },
+        ctx,
+      );
+      await c.configure({ extensions }, ctx);
+      conversationId = c.id as number;
+      this.watcher.updateIncident(incident.id, { conversationId });
+      this.setAgentName(row, conversationId, `Incident #${incident.id}`);
+    }
+    const c = await h.conversation(conversationId as ConversationId, ctx);
+    if (!c) throw Error(`Incident agent #${conversationId} is missing`);
+    const current = this.watcher.incident(incident.id)!;
+    await c.submit(
+      { type: "input", content: incidentBrief(current, samples, watch.url), requestId: `incident:${incident.id}:brief`, whenBusy: "followUp" },
+      ctx,
+    );
+    h.resume();
+    this.notify();
   }
 
   /** One project by its client and project ids; `404` when this device does not have it. */
@@ -651,6 +719,22 @@ export class Store {
         },
       });
       for (const extension of team.list) registry.install(extension);
+      const incident = createIncidentExtension({
+        incidentFor: (conversationId) => this.watcher.incidentForConversation(row.id, conversationId),
+        update: (id, fields) => this.watcher.updateIncident(id, fields),
+        sessionCwd: () => row.cwd,
+        startShip: (tx, conversationId, input, toolCallId) => {
+          const def = jobDef("ship")!;
+          return jobs.start(tx, conversationId as ConversationId, {
+            def,
+            input: resolveJobInput(def, input),
+            startedBy: "agent",
+            toolCallId,
+            now: Date.now(),
+          });
+        },
+      });
+      registry.install(incident);
       const jobs = createJobs({
         shared: this.shared,
         sessionId: row.id,
@@ -711,7 +795,7 @@ export class Store {
       row.model = rootModel.modelId;
       this.catalog.prepare("UPDATE sessions SET provider=?,model=? WHERE id=?").run(row.provider, row.model, row.id);
       const unsubscribe = harness.subscribeCommits(() => this.notify());
-      this.opened.set(row.id, { harness, unlock, unsubscribe, jobs, addons, team });
+      this.opened.set(row.id, { harness, unlock, unsubscribe, jobs, addons, team, incident });
       this.errors.delete(row.id);
       if (create) harness.resume();
       return harness;
@@ -1415,6 +1499,7 @@ export class Store {
   // ------------------------------------------------------------ lifecycle
 
   async close() {
+    this.watcher?.stop();
     for (const { harness, unlock, unsubscribe } of this.opened.values()) {
       unsubscribe();
       try {

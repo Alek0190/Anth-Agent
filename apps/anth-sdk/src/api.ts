@@ -100,6 +100,88 @@ export interface ProjectSummary {
   slug: string;
   name: string;
   createdAt: number;
+  /** Present when this device watches the project's production. */
+  watch?: ProjectWatchSummary;
+}
+
+/** Watch-and-fix state a device reports for one project. */
+export interface ProjectWatchSummary {
+  enabled: boolean;
+  /** Incidents not yet resolved: open, fixing, shipping or needing you. */
+  openIncidents: number;
+}
+
+// ---------------------------------------------------------------- watch and fix
+
+export type WatchSource = "vercel-log" | "vercel-request" | "uptime" | "webhook";
+export type WatchVerdict = "normal" | "suspicious" | "incident";
+
+/** GET /v1/projects/:client/:project/watch. One device watches a project's production. */
+export interface WatchInfo {
+  project: string;
+  enabled: boolean;
+  /** The session whose working directory holds the repository; incident agents run in it. */
+  sessionId: string;
+  /** The repository folder, relative to that session's working directory. */
+  path: string;
+  /** Production URL that uptime checks and the ship job verify. */
+  url: string;
+  /** Paths checked on every tick, e.g. ["/", "/api/health"]. */
+  paths: string[];
+  /** Read production runtime errors and 5xx requests with `vercel logs`. */
+  vercel: boolean;
+  /** Secret path for POST events from other services: `<device url>/hooks/<client>/<project>/<secret>`. */
+  webhookPath: string;
+  lastTickAt?: number;
+  lastError?: string;
+}
+
+/** PUT /v1/projects/:client/:project/watch. */
+export interface UpsertWatchBody {
+  sessionId: string;
+  path?: string;
+  url?: string;
+  paths?: string[];
+  vercel?: boolean;
+  enabled?: boolean;
+}
+
+export interface WatchEvent {
+  id: string;
+  source: WatchSource;
+  at: number;
+  level?: string;
+  message: string;
+  path?: string;
+  status?: number;
+  fingerprint: string;
+  verdict?: WatchVerdict;
+  /** Jev's impact score, 0 to 1. */
+  impact?: number;
+  incident?: number;
+}
+
+export type IncidentStatus = "fixing" | "shipping" | "resolved" | "needs-you";
+
+export interface Incident {
+  id: number;
+  project: string;
+  fingerprint: string;
+  title: string;
+  status: IncidentStatus;
+  openedAt: number;
+  updatedAt: number;
+  sessionId: string;
+  /** The incident agent's conversation in that session. */
+  conversationId?: number;
+  worktree?: string;
+  branch?: string;
+  base?: string;
+  /** How many events point at this incident. */
+  events: number;
+  /** The ship run started by submit_fix. */
+  shipTaskId?: number;
+  note?: string;
 }
 
 export interface UpsertClientBody {

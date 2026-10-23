@@ -79,6 +79,19 @@ export function v1(store: Store) {
       sessions: store.list().filter((row) => row.project === `${param(req, "client")}/${param(req, "project")}`).map((row) => row.id),
     }),
   );
+  // Watch and fix. One device watches a project's production; incidents become incident agents in the watch session.
+  const ref = (req: Request) => `${param(req, "client")}/${param(req, "project")}`;
+  const known = (req: Request) => store.project(param(req, "client"), param(req, "project"));
+  r.get("/projects/:client/:project/watch", (req, res) => res.json(store.watcher.get(ref(req))));
+  r.put("/projects/:client/:project/watch", (req, res) => {
+    known(req);
+    res.json(store.watcher.upsert(ref(req), req.body ?? {}));
+  });
+  r.delete("/projects/:client/:project/watch", (req, res) => res.json(store.watcher.remove(ref(req))));
+  r.post("/projects/:client/:project/watch/tick", route(async (req, res) => res.json(await store.watcher.tick(ref(req)))));
+  r.get("/projects/:client/:project/watch/events", (req, res) => res.json(store.watcher.events(ref(req), Number(req.query.limit ?? 100))));
+  r.get("/projects/:client/:project/incidents", (req, res) => res.json(store.watcher.incidents(ref(req))));
+  r.get("/incidents", (_req, res) => res.json(store.watcher.incidents()));
   r.put("/projects/:client/:project", (req, res) =>
     res.json(store.upsertProject(param(req, "client"), param(req, "project"), req.body ?? {})),
   );

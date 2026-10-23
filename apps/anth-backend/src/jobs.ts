@@ -626,7 +626,9 @@ export function createJobs(deps: JobsDeps) {
         }),
       effect: (command, opts) =>
         step("command", opts.label, async () => {
-          const dir = resolvePath(deps.cwd(), opts.dir ?? ".");
+          // Same folder as exec(): the conversation's working directory (an incident agent's worktree), else the session's.
+          const env = (await runtime.env(ctx)) as { cwd?: string } | undefined;
+          const dir = resolvePath(env?.cwd ?? deps.cwd(), opts.dir ?? ".");
           const r = await runEffect(command, dir, opts.secrets ?? {}, opts.timeoutSec ?? 300, runtime.signal);
           if (r.code !== 0) throw Error(`Exit ${r.code}: ${tail(r.out, 6)}`);
           return { value: r.out, detail: tail(r.out) || "(no output)" };
