@@ -2762,3 +2762,18 @@ textarea::placeholder {
     justify-content: flex-start;
   }
 }
+
+/* Above the composer while a team member is selected: messages there never reach the Lead. */
+.member-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font-size: 14px;
+}
+.member-banner span {
+  flex: 1;
+}
