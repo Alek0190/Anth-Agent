@@ -130,3 +130,10 @@ curl -s -X PUT $U/v1/projects/dental-co/booking-site -H "Authorization: Bearer $
 curl -s -X POST $U/v1/sessions -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"name":"On call","cwd":"~/anth-work","model":{"provider":"openrouter","modelId":"anthropic/claude-sonnet-5.5"},"project":"dental-co/booking-site","env":"prod"}'
 ```
+
+## Team log
+
+`GET /v1/sessions/:s/team/notes?limit=100` returns the session's team log, oldest first: `[{at, author, to, text}]`.
+Members and the Lead write to it with the `team_note` tool, and every member's final report is added by itself. Each
+delegated task carries the newest 20 notes for everyone and for that role, so the next member starts with what the
+others did and decided. `team_notes` reads more.

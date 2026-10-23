@@ -71,7 +71,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { createPlayground, Workspace, type SpawnSession } from "./extensions.js";
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
-import { createTeam, roleDef, ROLES, type TeamSettings } from "./team.js";
+import { createTeam, roleDef, ROLES, type TeamNote, type TeamSettings } from "./team.js";
 import { Watcher } from "./watch.js";
 import { createIncidentExtension, incidentBrief, prepareWorktree } from "./incident.js";
 import { JOB_RUNS_DOC, type JobRun } from "../../anth-sdk/src/jobs.js";
@@ -223,6 +223,7 @@ export class Store {
     this.catalog = new DatabaseSync(this.catalogPath);
     this.catalog.exec(`PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,name TEXT NOT NULL,cwd TEXT NOT NULL,dbPath TEXT NOT NULL UNIQUE,createdAt INTEGER NOT NULL,model TEXT NOT NULL,provider TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS team_notes(sessionId TEXT NOT NULL,key TEXT NOT NULL,at INTEGER NOT NULL,author TEXT NOT NULL,toRole TEXT NOT NULL,text TEXT NOT NULL,PRIMARY KEY(sessionId,key));
       CREATE TABLE IF NOT EXISTS conversation_names(sessionId TEXT NOT NULL,conversationId INTEGER NOT NULL,name TEXT NOT NULL,PRIMARY KEY(sessionId,conversationId));
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(key TEXT PRIMARY KEY,route TEXT NOT NULL,status INTEGER NOT NULL,body TEXT NOT NULL,createdAt INTEGER NOT NULL);
@@ -704,6 +705,13 @@ export class Store {
       for (const extension of addons.list) registry.install(extension);
       const team = createTeam({
         settings: () => ({ enabled: true, models: this.teamModels(row.id) }),
+        notes: {
+          add: (n) =>
+            void this.catalog
+              .prepare("INSERT OR IGNORE INTO team_notes(sessionId,key,at,author,toRole,text) VALUES(?,?,?,?,?,?)")
+              .run(row.id, n.key, Date.now(), n.author, n.to, n.text),
+          list: (opts) => this.teamNotes(row.id, opts),
+        },
         route: (modelId) => this.routedModel({ provider: "openrouter", modelId }),
         name: (conversationId, name) => {
           try {
@@ -1483,6 +1491,18 @@ export class Store {
       }
     }
     return out;
+  }
+
+  /** The newest notes of a session's team log, oldest first; with `for`, only notes for everyone or for that role. */
+  teamNotes(sessionId: string, opts: { limit: number; for?: string }): TeamNote[] {
+    const rows = (
+      opts.for
+        ? this.catalog
+            .prepare("SELECT at,author,toRole AS 'to',text FROM team_notes WHERE sessionId=? AND toRole IN ('all',?) ORDER BY at DESC, rowid DESC LIMIT ?")
+            .all(sessionId, opts.for, opts.limit)
+        : this.catalog.prepare("SELECT at,author,toRole AS 'to',text FROM team_notes WHERE sessionId=? ORDER BY at DESC, rowid DESC LIMIT ?").all(sessionId, opts.limit)
+    ) as unknown as TeamNote[];
+    return rows.reverse();
   }
 
   /** True when this conversation is the session's root agent and that agent leads a team (the autopilot's Lead). */

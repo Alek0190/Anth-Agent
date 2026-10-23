@@ -152,6 +152,11 @@ export function v1(store: Store) {
 
   // ---------------------------------------------------------- agents
   r.get("/sessions/:s/agents", route(async (_req, res) => res.json(await store.agents(L(res).row))));
+  // The team log: what members did and decided, oldest first.
+  r.get(
+    "/sessions/:s/team/notes",
+    route(async (req, res) => res.json(store.teamNotes(L(res).row.id, { limit: Math.max(1, Math.min(500, Number(req.query.limit) || 100)) }))),
+  );
   r.post(
     "/sessions/:s/agents",
     create,

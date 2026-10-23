@@ -36,6 +36,10 @@ const SHARED = `You are a member of Anthward's agent team, building software for
 Work only on that task, inside the project's working directory. Never touch files outside it.
 Read the code before you change it, keep changes small and consistent with the existing style, and run the relevant
 checks (build, tests, lint) before you answer when the project has them.
+The team shares a log. Your task arrives with the newest notes from the team: read them, they say what others already
+did and decided. Use team_note for anything another member must know: a changed contract or file layout, a decision, a
+trap you found, work you left half done. Use team_notes to read more of the log. Your final answer goes into the log by
+itself, so the next member sees it.
 Never deploy, publish, push to a remote, merge, delete branches, run database migrations against anything but a local or
 dev database, or send messages to people. Those need the owner's approval and are done through other tools later.
 Finish with a short report for the Lead: what you did, the files you changed, how you checked it, and anything left open.`;
@@ -188,6 +192,26 @@ export interface TeamHost {
   name(conversationId: number, name: string): void;
   /** The session's project placement, for the members' prompts. */
   placement(): { project?: string; env?: EnvironmentName };
+  /** The team log: add a note once per key (replays add nothing), and read the newest notes, oldest first. */
+  notes: {
+    add(note: { key: string; author: string; to: string; text: string }): void;
+    list(opts: { limit: number; for?: TeamRoleId }): TeamNote[];
+  };
+}
+
+/** One entry in a session's team log: who wrote it, for whom ("all" or a role id), and what it says. */
+export interface TeamNote {
+  at: number;
+  author: string;
+  to: string;
+  text: string;
+}
+
+/** The notes as plain text for a prompt or a tool result. */
+export function formatNotes(notes: TeamNote[]) {
+  return notes
+    .map((n) => `- ${new Date(n.at).toISOString().slice(0, 16).replace("T", " ")} ${n.author}${n.to === "all" ? "" : ` → ${roleDef(n.to)?.title ?? n.to}`}: ${n.text}`)
+    .join("\n");
 }
 
 /** Pull the plain text out of an assistant entry's model messages. */
@@ -207,11 +231,51 @@ export function createTeam(host: TeamHost) {
     return p.project ? `This is the ${p.env ?? "dev"} environment of project ${p.project}.` : "";
   };
 
+  const teamNote = defineTool({
+    name: "team_note",
+    description:
+      "Leave a note in the team log: what you did, a decision, a changed contract, a trap, work left open. Every member " +
+      "gets the newest notes with their next task. Write it for someone who has not seen your work.",
+    parameters: Type.Object({
+      text: Type.String({ description: "The note: short, concrete, with file paths where they help." }),
+      to: Type.Optional(
+        Type.Union([Type.Literal("all"), ...ROLES.map((r) => Type.Literal(r.id))], { description: "Who it is for: all (default) or one role." }),
+      ),
+    }),
+    replay: "safe",
+    execute: async (args, api, ctx) => {
+      const me = await authorOf(api, ctx);
+      host.notes.add({ key: `note:${api.taskId}`, author: me, to: args.to ?? "all", text: args.text.trim().slice(0, 4000) });
+      return { content: [{ type: "text", text: "Noted in the team log." }] };
+    },
+  });
+
+  const teamNotes = defineTool({
+    name: "team_notes",
+    description: "Read the team log: what members did and decided, newest last.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Number({ description: "How many notes, newest first counted (default 30, max 200)." })),
+    }),
+    replay: "safe",
+    execute: async (args) => {
+      const notes = host.notes.list({ limit: Math.max(1, Math.min(200, Math.floor(args.limit ?? 30))) });
+      return { content: [{ type: "text", text: notes.length ? formatNotes(notes) : "The team log is empty." }] };
+    },
+  });
+
+  /** The author name for a note: the member's title, or "Lead". */
+  const authorOf = async (api: { agent: (ctx: never) => Promise<{ extensions: readonly Extension[] }> }, ctx: unknown) => {
+    const names = (await api.agent(ctx as never)).extensions.map((e) => e.name);
+    const member = MEMBER_ROLES.find((r) => names.includes(`team-${r.id}`));
+    return member?.title ?? "Lead";
+  };
+
   const members = new Map<TeamRoleId, Extension>(
     MEMBER_ROLES.map((role) => [
       role.id,
       defineExtension({
         name: `team-${role.id}`,
+        tools: [teamNote, teamNotes],
         sections: [section(`team-${role.id}`, () => [SHARED, role.prompt, context()].filter(Boolean).join("\n\n"), { tag: false })],
       }),
     ]),
@@ -248,8 +312,11 @@ export function createTeam(host: TeamHost) {
       api.output(`${role.title} is working on it (${model.modelId})…\n`);
       const child = await api.conversation(id as ConversationId, ctx);
       if (!child) throw Error("Team member conversation missing");
+      // The task carries the newest team notes for everyone and for this role, so the member starts with the context.
+      const notes = host.notes.list({ limit: 20, for: role.id });
+      const content = notes.length ? `${args.task}\n\n---\nTeam log (newest last; team_notes reads more):\n${formatNotes(notes)}` : args.task;
       const result = await (
-        await child.submit({ type: "input", content: args.task, requestId: `delegate:${api.taskId}` }, ctx)
+        await child.submit({ type: "input", content, requestId: `delegate:${api.taskId}` }, ctx)
       ).wait(ctx);
       const answer =
         result.status === "done" && result.type === "input"
@@ -258,6 +325,8 @@ export function createTeam(host: TeamHost) {
       const text = answer
         ? answerText(answer.model ?? [])
         : `The ${role.title} stopped without an answer (${result.status}): it was cut off, not refused. Check what it already did (git status, the files) and delegate the rest again, or give it to another member.`;
+      // Every report goes into the team log, so whoever works next sees what this member did.
+      if (answer) host.notes.add({ key: `report:${api.taskId}`, author: role.title, to: "all", text: text.slice(0, 4000) || "(no text)" });
       return {
         content: [{ type: "text", text: `${role.title} reports:\n${text || "(no text)"}` }],
         details: { conversationId: id, role: role.id, model: model.modelId },
@@ -267,7 +336,7 @@ export function createTeam(host: TeamHost) {
 
   const lead = defineExtension({
     name: "team",
-    tools: [delegate],
+    tools: [delegate, teamNote, teamNotes],
     sections: [section("team", () => [roleDef("lead")!.prompt, context()].filter(Boolean).join("\n\n"), { tag: false })],
   });
 
@@ -278,7 +347,7 @@ export function createTeam(host: TeamHost) {
     return {
       model: host.route(host.settings().models[role.id] ?? role.defaultModel),
       extensions: [CodingTools, members.get(role.id)!],
-      tools: toolsFor(role),
+      tools: [...toolsFor(role), teamNote, teamNotes],
     };
   };
 
