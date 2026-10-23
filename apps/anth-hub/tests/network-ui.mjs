@@ -643,12 +643,22 @@ try {
     page.locator(".tree-row.agent").filter({ hasText: "Backend developer" }),
   ).toBeVisible();
   await page.screenshot({ path: "/tmp/anth-net-team.png" });
+  // Selecting the member warns that messages there never reach the Lead, and one click goes back to the owner.
+  await expect(page.locator(".member-banner")).toHaveCount(0);
+  await page.locator(".tree-row.agent").filter({ hasText: "Backend developer" }).click();
+  await expect(page.locator(".member-banner")).toContainText("Backend developer");
+  await expect(page.locator(".member-banner")).toContainText("can't delegate or ship");
+  await page.getByRole("button", { name: "Message its owner" }).click();
+  await expect(page.locator(".member-banner")).toHaveCount(0);
+  await expect(
+    chat().locator(".markdown").filter({ hasText: "Backend developer reports" }),
+  ).toBeVisible({ timeout: 10000 });
   await page.getByRole("switch", { name: "Lead a team" }).click();
   await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute(
     "aria-checked",
     "false",
   );
-  pass("agent team: Team tab, model per role, a delegation shows the member in the tree");
+  pass("agent team: Team tab, model per role, a delegation shows the member in the tree, the member banner leads back");
 
   // Watch and fix: watch the project from the Watch tab, then three webhook events with one cause open an incident.
   await tab("Watch");

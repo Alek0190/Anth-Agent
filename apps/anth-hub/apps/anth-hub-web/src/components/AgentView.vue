@@ -317,6 +317,20 @@ watch(
         <p v-for="(n, i) in agentState.notices" :key="i" class="message-error">{{ n }}</p>
       </template>
     </div>
+    <div v-if="current?.kind === 'subagent'" class="member-banner" role="status">
+      <span
+        >You're messaging <b>{{ current.name || `agent #${current.id}` }}</b>, a team member. It works on one
+        task for its owner and can't delegate or ship.</span
+      >
+      <button
+        v-if="current.ownerAgentId !== undefined"
+        type="button"
+        class="primary"
+        @click="choose(current.ownerAgentId)"
+      >
+        Message its owner
+      </button>
+    </div>
     <Composer />
   </section>
 </template>
