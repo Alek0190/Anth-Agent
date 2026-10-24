@@ -258,3 +258,46 @@ test("alerts in the backend: a Telegram button approves a durable job run", asyn
     await t.cleanup();
   }
 });
+
+test("alerts: a failed ship the Lead is fixing says so; going live is announced; stuck on one problem is a real failure", async () => {
+  const tg = await fakeTelegram("T0K");
+  const dataDir = mkdtempSync(join(tmpdir(), "anth-tg-"));
+  const runs = new Map<number, JobRun>();
+  const host: AlertsHost = {
+    name: "box",
+    alertRuns: async () => [...runs.values()].map((r) => ({ session, conversationId: 7, agent: "Main", run: r })),
+    approveRun: async () => {},
+    incidents: () => [],
+    subscribe: () => () => {},
+    isLead: async () => true,
+  };
+  const alerts = new Alerts(host, alertsConfig({ TELEGRAM_BOT_TOKEN: "T0K", TELEGRAM_CHAT_ID: String(CHAT), ANTH_TELEGRAM_API: tg.api }, dataDir)!, () => {});
+  /** A finished ship run; failures name the place the reviewer blocked on. */
+  const ended = (id: number, status: JobRun["status"], place = `src/f${id}.ts:${id}`) =>
+    run(id, {
+      status,
+      approval: undefined,
+      startedAt: id,
+      error: status === "failed" ? `The reviewer requested changes: ${place} breaks saving` : undefined,
+      result: status === "completed" ? "https://site.test answers 200" : undefined,
+    });
+  try {
+    await alerts.scan();
+    // Different problems each round: progress, the Lead is on it.
+    for (const id of [1, 2, 3]) runs.set(id, ended(id, "failed"));
+    await alerts.scan();
+    assert.match(tg.sent().at(-1)!.text, /🔧 <b>Ship to production stopped<\/b>[\s\S]*The Lead is fixing it \(round 3\)/);
+    assert.equal(tg.sent().filter((m) => m.text.includes("🔴")).length, 0);
+    runs.set(4, ended(4, "completed"));
+    await alerts.scan();
+    assert.match(tg.sent().at(-1)!.text, /✅ <b>Ship to production done<\/b>[\s\S]*answers 200/);
+    // The same problem three rounds in a row: stuck, a real failure.
+    for (const id of [5, 6, 7]) runs.set(id, ended(id, "failed", "src/editor.tsx:553"));
+    await alerts.scan();
+    assert.match(tg.sent().at(-1)!.text, /🔴 <b>Ship to production failed<\/b> · acme\/site · stuck on the same problem/);
+  } finally {
+    await alerts.stop();
+    tg.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});

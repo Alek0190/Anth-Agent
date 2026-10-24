@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import type { Incident } from "../../anth-sdk/src/api.js";
 import type { JobRun } from "../../anth-sdk/src/jobs.js";
 import type { SessionRow } from "./store.js";
+import { MAX_ROUNDS, STUCK_REPEATS, repeatsOf, roundOf } from "./autopilot.js";
 
 /** What the alerts need from the store; a narrow view so tests and the store stay decoupled. */
 export interface AlertsHost {
@@ -27,6 +28,8 @@ export interface AlertsHost {
   incidents(): Incident[];
   /** Call fn whenever anything changes. */
   subscribe(fn: () => void): () => void;
+  /** True when the conversation is a team Lead, which fixes failed ship and rollback runs itself (the autopilot). */
+  isLead?(sessionId: string, conversationId: number): Promise<boolean>;
 }
 
 export interface AlertsConfig {
@@ -246,7 +249,25 @@ export class Alerts {
           continue;
         }
         this.insert(key, "failed", {}, "closed");
-        await this.send(`🔴 <b>${esc(run.title)} failed</b> · ${esc(where(session))}\n${esc(clip(run.error ?? "No error message", 600))}`);
+        // A team Lead fixes failed ship and rollback runs itself: say it is on it, and only call it a failure when the
+        // last round is used up.
+        const lead = ["ship", "rollback"].includes(run.job) && (await this.host.isLead?.(session.id, conversationId));
+        const mine = runs.filter((r) => r.session.id === session.id && r.conversationId === conversationId).map((r) => r.run);
+        const round = lead ? roundOf(mine, run) : 0;
+        const stuck = lead && repeatsOf(mine, run) >= STUCK_REPEATS;
+        if (lead && !stuck && round < MAX_ROUNDS)
+          await this.send(
+            `🔧 <b>${esc(run.title)} stopped</b> · ${esc(where(session))}\nThe Lead is fixing it (round ${round}). You'll hear when it's ready for approval, or if it needs you.\n<i>${esc(clip(run.error ?? "", 300))}</i>`,
+          );
+        else
+          await this.send(
+            `🔴 <b>${esc(run.title)} failed</b> · ${esc(where(session))}${stuck ? " · stuck on the same problem; the Lead will report what blocks it" : lead ? ` · the Lead used all ${MAX_ROUNDS} rounds and will report what blocks it` : ""}\n${esc(clip(run.error ?? "No error message", 600))}`,
+          );
+      } else if (run.status === "completed" && ["ship", "rollback"].includes(run.job)) {
+        const key = `completed:${at}`;
+        if (this.alert(key)) continue;
+        this.insert(key, "failed", {}, "closed");
+        if (!firstScan) await this.send(`✅ <b>${esc(run.title)} done</b> · ${esc(where(session))}\n${esc(clip(run.result ?? "", 400))}`);
       }
     }
 

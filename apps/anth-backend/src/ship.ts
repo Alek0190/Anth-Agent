@@ -75,6 +75,12 @@ const inDir = (dir: string, command: string) => (dir === "." ? command : `cd ${q
 const auto = (v: unknown) => v === undefined || v === "auto" || v === "";
 
 /** The reviewer's verdict: the last line that starts with "VERDICT:". */
+/** The blocking findings of a review report, for an error message (the whole report is in the team log). */
+export function blocking(report: string) {
+  const m = /blocking[^\n]*\n([\s\S]*?)(\n\s*\**\s*(follow-?ups?|non-blocking)\b|$)/i.exec(report);
+  return (m ? m[1] : report.split("\n").slice(-6).join("\n")).trim().slice(0, 1500);
+}
+
 export function parseVerdict(report: string): "safe" | "owner" | "changes" | undefined {
   const lines = report.split("\n").filter((l) => /^\s*\**\s*VERDICT\s*:/i.test(l));
   const line = lines.at(-1)?.toLowerCase();
@@ -357,10 +363,26 @@ const ship: Record<string, Handler> = {
       `It is about to be deployed as a preview and, after the owner approves, to production. ` +
       `First read AGENTS.md${where} if it exists: risks it lists as accepted and decisions it records are known, so ` +
       `mention them at most in one line and never request changes for them. Judge this change, not the whole app.`;
-    const review = await p.member("reviewer", ask("Review"));
-    const security = await p.member("security", ask("Check the security of"));
+    // Earlier ship reviews of this work: the reviewer checks those findings first instead of starting over, so each
+    // round converges on the same list rather than surfacing new nits.
+    const earlier = p
+      .notes(200)
+      .filter((n) => n.author.startsWith("Ship review"))
+      .slice(-2)
+      .map((n) => `${n.author}:\n${n.text}`)
+      .join("\n\n");
+    const withEarlier = (text: string) =>
+      earlier
+        ? `${text}\n\nEarlier reviews of this work found the items below. Check each one first and say whether it is fixed. ` +
+          `Then add only new blocking problems; do not raise new non-blocking points as blockers.\n\n${earlier.slice(-6000)}`
+        : text;
+    const review = await p.member("reviewer", withEarlier(ask("Review")));
+    const security = await p.member("security", withEarlier(ask("Check the security of")));
     const verdict = parseVerdict(review);
-    if (verdict === "changes") throw Error(`The reviewer requested changes. ${review.split("\n").slice(-6).join(" ")}`);
+    // Both reports go to the team log, so the developers who fix them and the next review see the same list.
+    p.log(`Ship review ${p.run.n}: reviewer`, review);
+    p.log(`Ship review ${p.run.n}: security`, security);
+    if (verdict === "changes") throw Error(`The reviewer requested changes (full report in the team log). ${blocking(review)}`);
     return {
       done: `${stat.trim() || "Reviewed"}. Reviewer: ${verdict === "safe" ? "safe to merge" : verdict === "owner" ? "needs your approval" : "no verdict"}`,
       data: { review, security, verdict: verdict ?? "none" },

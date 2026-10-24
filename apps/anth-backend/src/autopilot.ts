@@ -13,8 +13,44 @@ import type { SessionRow } from "./store.js";
 
 /** Jobs whose endings the Lead acts on. */
 const JOBS = new Set(["ship", "rollback"]);
-/** Rounds of fix-and-ship-again before the Lead must stop and report. */
-export const MAX_ROUNDS = 3;
+/**
+ * A hard budget of fix-and-ship rounds. Progress, not a count, is what normally decides: rounds that each fail on a
+ * different finding are progress and go on; the Lead stops and reports only when the same blocker survives
+ * STUCK_REPEATS rounds in a row, or this budget is spent.
+ */
+export const MAX_ROUNDS = 8;
+/** The same blocker this many rounds in a row means the team is stuck, not making progress. */
+export const STUCK_REPEATS = 3;
+
+/** The file:line places a failure names, to tell the same blocker from a new one. */
+function places(error: string) {
+  return new Set([...error.matchAll(/[\w./-]+\.[a-z]{1,5}:\d+/gi)].map((m) => m[0].toLowerCase()));
+}
+
+/** True when two failures name the same blocker: most of the same file:line places, or the same opening words. */
+export function sameBlocker(a: string, b: string) {
+  const pa = places(a);
+  const pb = places(b);
+  if (pa.size && pb.size) {
+    const shared = [...pa].filter((p) => pb.has(p)).length;
+    return shared / Math.min(pa.size, pb.size) >= 0.5;
+  }
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").slice(0, 160);
+  return norm(a) === norm(b);
+}
+
+/** How many failed runs in a row, ending with this one, stopped on the same blocker (1 = a new blocker). */
+export function repeatsOf(conversationRuns: JobRun[], run: JobRun) {
+  const failed = conversationRuns
+    .filter((r) => r.job === run.job && r.startedAt <= run.startedAt)
+    .sort((a, b) => a.startedAt - b.startedAt);
+  let n = 1;
+  for (let i = failed.length - 2; i >= 0 && failed[i].status === "failed"; i--) {
+    if (!sameBlocker(failed[i].error ?? "", run.error ?? "")) break;
+    n++;
+  }
+  return n;
+}
 
 export interface AutopilotHost {
   alertRuns(): Promise<{ session: SessionRow; conversationId: number; agent: string; run: JobRun }[]>;
@@ -25,15 +61,28 @@ export interface AutopilotHost {
   subscribe(fn: () => void): () => void;
 }
 
+/** Which fix-and-ship round a run is: its job's failed runs since the last completed one, up to and including it. */
+export function roundOf(conversationRuns: JobRun[], run: JobRun) {
+  const mine = conversationRuns.filter((r) => r.job === run.job && r.startedAt <= run.startedAt).sort((a, b) => a.startedAt - b.startedAt);
+  const lastDone = mine.map((r) => r.status).lastIndexOf("completed", run.status === "completed" ? mine.length - 2 : mine.length - 1);
+  return Math.max(1, mine.slice(lastDone + 1).filter((r) => r.status === "failed").length);
+}
+
 /** The notice for a run that ended, or undefined when the Lead has nothing to do about it. */
-export function notice(run: JobRun, round: number): string | undefined {
+export function notice(run: JobRun, round: number, repeats = 1): string | undefined {
   const name = `${run.title} run ${run.run}`;
   if (run.status === "failed") {
     const where = run.phases.find((p) => p.status === "failed")?.label ?? run.phase ?? "a phase";
-    const next =
-      round < MAX_ROUNDS
-        ? `This was round ${round} of ${MAX_ROUNDS}. Fix the cause yourself with the team: delegate the fixes, have the tester check them, then start "${run.job}" again with the same inputs. Do not ask the owner first.`
-        : `This was round ${round} of ${MAX_ROUNDS}: do not start it again. Report to the owner what blocks it, what you tried, and the one decision you need.`;
+    const stuck = repeats >= STUCK_REPEATS;
+    const again =
+      repeats > 1 && !stuck
+        ? `This is the same blocker as the last round, so the last fix did not work. Before you ship again, find the root cause: have a developer reproduce it in a failing test first, fix it until that test passes, and have your reviewer confirm it is gone. `
+        : "";
+    const next = stuck
+      ? `The same blocker has now stopped ${repeats} rounds in a row. Do not start it again. Report to the owner what blocks it, what you tried each round, and the one decision you need.`
+      : round < MAX_ROUNDS
+        ? `${again}This was round ${round} (rounds that each fix something new go on; you stop only when you are stuck on the same problem). Fix the cause yourself with the team. When a review stopped it, the full report is in the team log (team_notes, "Ship review ${run.run}"): give every Blocking item to the developers, have the tester check, ask your reviewer to confirm they are fixed, then start "${run.job}" again with the same inputs. Follow-ups do not need fixing now. Do not ask the owner first.`
+        : `This was round ${round} of at most ${MAX_ROUNDS}: do not start it again. Report to the owner what blocks it, what you tried each round, and the one decision you need.`;
     return `[Automatic notice] ${name} stopped in "${where}":\n${run.error ?? "no error message"}\n\n${next}`;
   }
   if (run.status === "completed")
@@ -117,14 +166,12 @@ export class Autopilot {
         seen();
         continue;
       }
-      // Rounds: failed runs of this job since its last completed run, in this conversation.
-      const mine = runs
-        .filter((r) => r.session.id === session.id && r.conversationId === conversationId && r.run.job === run.job && r.run.startedAt <= run.startedAt)
-        .map((r) => r.run)
-        .sort((a, b) => a.startedAt - b.startedAt);
-      const lastDone = mine.map((r) => r.status).lastIndexOf("completed", run.status === "completed" ? mine.length - 2 : mine.length - 1);
-      const round = mine.slice(lastDone + 1).filter((r) => r.status === "failed").length;
-      const text = notice(run, Math.max(1, round));
+      const round = roundOf(
+        runs.filter((r) => r.session.id === session.id && r.conversationId === conversationId).map((r) => r.run),
+        run,
+      );
+      const mine = runs.filter((r) => r.session.id === session.id && r.conversationId === conversationId).map((r) => r.run);
+      const text = notice(run, round, run.status === "failed" ? repeatsOf(mine, run) : 1);
       if (text) await this.host.submit(session.id, conversationId, text, `autopilot:${run.id}:${run.status}`);
       // Marked after the submit (which is idempotent by requestId), so a crash in between tells the Lead once, not never.
       seen();

@@ -705,13 +705,7 @@ export class Store {
       for (const extension of addons.list) registry.install(extension);
       const team = createTeam({
         settings: () => ({ enabled: true, models: this.teamModels(row.id) }),
-        notes: {
-          add: (n) =>
-            void this.catalog
-              .prepare("INSERT OR IGNORE INTO team_notes(sessionId,key,at,author,toRole,text) VALUES(?,?,?,?,?,?)")
-              .run(row.id, n.key, Date.now(), n.author, n.to, n.text),
-          list: (opts) => this.teamNotes(row.id, opts),
-        },
+        notes: { add: (n) => this.addTeamNote(row.id, n), list: (opts) => this.teamNotes(row.id, opts) },
         route: (modelId) => this.routedModel({ provider: "openrouter", modelId }),
         name: (conversationId, name) => {
           try {
@@ -747,6 +741,7 @@ export class Store {
         shared: this.shared,
         sessionId: row.id,
         cwd: () => row.cwd,
+        notes: { add: (n) => this.addTeamNote(row.id, n), list: (opts) => this.teamNotes(row.id, opts) },
         team: {
           change: (role) => team.memberChange(role),
           title: (role) => roleDef(role)?.title ?? role,
@@ -1491,6 +1486,13 @@ export class Store {
       }
     }
     return out;
+  }
+
+  /** Add a note to a session's team log once per key (a replayed tool call or job phase adds nothing). */
+  addTeamNote(sessionId: string, n: { key: string; author: string; to: string; text: string }) {
+    this.catalog
+      .prepare("INSERT OR IGNORE INTO team_notes(sessionId,key,at,author,toRole,text) VALUES(?,?,?,?,?,?)")
+      .run(sessionId, n.key, Date.now(), n.author, n.to, n.text);
   }
 
   /** The newest notes of a session's team log, oldest first; with `for`, only notes for everyone or for that role. */
