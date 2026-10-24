@@ -9,6 +9,7 @@
 //   "page: <summary>" → one ping_on_call_engineer call
 //   "submitfix: <test command>" → one submit_fix call (incident agents)
 //   "delegate: <role> | <task>[ ;; <role> | <task>…]" → one delegate call per pair, all in the same turn
+//   "note: <text>" → one team_note call (team members and the Lead)
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
 import type { MutableModels } from "@earendil-works/pi-ai/models";
@@ -80,6 +81,7 @@ export function installFaux(models: MutableModels) {
         .map(([role, task]) => fauxToolCall("delegate", { role, task: task ?? "" }));
       return fauxAssistantMessage([fauxText("Delegating."), ...calls], { stopReason: "toolUse" });
     }
+    if (prompt.startsWith("note:")) return call("team_note", { text: prompt.slice(5).split("\n---\n")[0].trim() });
     if (prompt.startsWith("page:")) return call("ping_on_call_engineer", { summary: prompt.slice(5).trim() });
     if (prompt.startsWith("Release check:"))
       return call("bash", { command: "git log --oneline -5 2>/dev/null || echo 'no git history'; ls | head -5" });

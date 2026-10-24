@@ -29,6 +29,7 @@ const alerts =
       approveRun: (s, c, t, a) => store.approveRun(s, c, t, a),
       incidents: () => store.watcher.incidents(),
       subscribe: (fn) => store.subscribe(fn),
+      isLead: (s, c) => store.isLead(s, c),
     },
     alertSettings,
   );

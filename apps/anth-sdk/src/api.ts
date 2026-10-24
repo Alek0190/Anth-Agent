@@ -228,7 +228,7 @@ export interface TeamRoleInfo {
   summary: string;
   /** The coding tools the role is offered (the Lead also has its session's tools and `delegate`). */
   tools: string[];
-  /** False for roles that only read: reviewer and security. */
+  /** False for roles that only read the project: reviewer and security. They can still add notes to the team log. */
   writes: boolean;
   defaultModel: string;
   /** The model the role runs on now: the Lead's is the root agent's model, members use an override or their default. */
@@ -348,7 +348,10 @@ export interface AgentConfig {
   thinkingLevel?: ThinkingLevel;
   instructions?: string;
   cwd?: string;
-  /** Offer only tools that read: tools that create, update or delete leave the agent's requests. */
+  /**
+   * Offer only tools that read: tools that create, update or delete leave the agent's requests. The team log's
+   * team_note stays: it changes nothing in the project, it is how read-only agents report.
+   */
   readOnly?: boolean;
 }
 

@@ -36,6 +36,10 @@ const SHARED = `You are a member of Anthward's agent team, building software for
 Work only on that task, inside the project's working directory. Never touch files outside it.
 Read the code before you change it, keep changes small and consistent with the existing style, and run the relevant
 checks (build, tests, lint) before you answer when the project has them.
+The team shares a log. Your task arrives with the newest notes from the team: read them, they say what others already
+did and decided. Use team_note for anything another member must know: a changed contract or file layout, a decision, a
+trap you found, work you left half done. Use team_notes to read more of the log. Your final answer goes into the log by
+itself, so the next member sees it.
 Never deploy, publish, push to a remote, merge, delete branches, run database migrations against anything but a local or
 dev database, or send messages to people. Those need the owner's approval and are done through other tools later.
 Finish with a short report for the Lead: what you did, the files you changed, how you checked it, and anything left open.`;
@@ -57,7 +61,7 @@ decide, try, check, and try another way when something fails. Only stop to ask t
 - deleting or overwriting real user data,
 - a real change of direction the brief does not settle.
 Everything else (which member does what, how to fix a failed test or review, retrying, splitting work differently) you
-decide. Never end a turn with "should I continue?" or a list of options when you can pick the sensible one: pick it,
+decide. Never ask permission to fix a bug, to run another review round or to ship again: that is your job, do it. Never end a turn with "should I continue?" or a list of options when you can pick the sensible one: pick it,
 say which in one line, and carry on. When you are blocked, say exactly what blocks you and the one decision you need.
 
 How you work:
@@ -69,8 +73,10 @@ How you work:
    or folders, the acceptance check, and the decisions already made. Members do not see this conversation.
    Independent tasks can be delegated in the same turn; they run side by side.
 4. After every task that changes code, delegate to the tester to run and extend the tests for that change.
-5. When the work is done, delegate a review to the reviewer, then a security check to security for anything touching
-   auth, secrets, payments, user data or dependencies.
+5. Before you ship, review until clean: delegate a review to the reviewer (and to security for anything touching auth,
+   secrets, payments, user data or dependencies). Give every Blocking finding to the developers in one task each, have
+   the tester check, then ask the reviewer again. Repeat until the reviewer says "safe to merge" or "needs owner
+   approval". Follow-ups never hold up a ship: note them in the team log for later.
 6. Report to the owner: what was built, how it was checked, what is left, and anything that needs their approval.
    Report when the goal is reached or truly blocked, not after every step.
 
@@ -82,6 +88,9 @@ When things go wrong:
 - "[Automatic notice]" messages tell you how a ship or rollback ended. Follow them: fix and ship again when told to, and
   report to the owner when it went live, was declined, or after the last round.
 - Never commit generated data (for example a data/ folder a test run changed): restore it with git first.
+- Record decisions and accepted risks in the project's AGENTS.md (a short "Decisions and accepted risks" list), for
+  example "No login yet: production and preview sit behind HTTP basic auth until accounts are built". The ship's
+  reviewer and security read it, so known risks stop blocking every ship, and new members start with the context.
 
 Shipping: when the work is done and tested, ship it unless the owner said not to: start the durable job "ship" with
 run_durable_job (input path: the project folder, if it is not the working directory). It commits the work to a branch,
@@ -139,11 +148,20 @@ code to make a test pass. Report each failure with the command, the error and th
     tools: ["read", "bash"],
     defaultModel: "openai/gpt-6-astra",
     prompt: `You are the reviewer. Review the change you were given like a senior engineer: correctness, edge cases, error
-handling, naming, duplication, and whether it does what the task asked. Use git diff and read the files; do not edit.
-Apply the strict merge rule: a change is safe to merge only if it touches no database migrations, environment or secret
-files, dependency manifests or lockfiles, deploy or CI configuration, or authentication code. Anything else needs the
-owner. End with a verdict line: "VERDICT: safe to merge", "VERDICT: needs owner approval (reason)" or
-"VERDICT: changes requested", followed by the specific findings.`,
+handling, and whether it does what the task asked. Use git diff and read the files; do not edit.
+Review the whole change in one pass and list every problem you find now: the developers fix your whole list in one
+round, so a problem you hold back costs another round.
+Sort findings into two lists:
+- Blocking: the change does not do what was asked, breaks something that worked, loses or corrupts data, adds a
+  security hole, or fails its build or tests. For each: file and line, what goes wrong for a user, and the fix.
+- Follow-ups: everything else (style, naming, duplication, nicer error messages, hardening of code this change did
+  not touch). These never block.
+Then the verdict line:
+- "VERDICT: changes requested" only when the Blocking list is not empty.
+- Otherwise "VERDICT: safe to merge", or "VERDICT: needs owner approval (reason)" when the change touches database
+  migrations, environment or secret files, dependency manifests or lockfiles, deploy or CI configuration, or
+  authentication code.
+Write it as: "Blocking:" list, "Follow-ups:" list, verdict line last.`,
   },
   {
     id: "security",
@@ -153,7 +171,8 @@ owner. End with a verdict line: "VERDICT: safe to merge", "VERDICT: needs owner 
     defaultModel: "anthropic/claude-sonnet-5.5",
     prompt: `You are the security reviewer. Check the change for leaked secrets, missing auth or authorization checks,
 injection (SQL, shell, HTML), unsafe file or network access, weak session handling, and risky or outdated dependencies.
-Do not edit files. Rank findings by severity with the file and line, and say how to fix each.`,
+Do not edit files. List every finding in one pass, ranked by severity, with the file and line and how to fix each. Say
+which findings this change introduced and which were there before it.`,
   },
   {
     id: "ops",
@@ -185,6 +204,26 @@ export interface TeamHost {
   name(conversationId: number, name: string): void;
   /** The session's project placement, for the members' prompts. */
   placement(): { project?: string; env?: EnvironmentName };
+  /** The team log: add a note once per key (replays add nothing), and read the newest notes, oldest first. */
+  notes: {
+    add(note: { key: string; author: string; to: string; text: string }): void;
+    list(opts: { limit: number; for?: TeamRoleId }): TeamNote[];
+  };
+}
+
+/** One entry in a session's team log: who wrote it, for whom ("all" or a role id), and what it says. */
+export interface TeamNote {
+  at: number;
+  author: string;
+  to: string;
+  text: string;
+}
+
+/** The notes as plain text for a prompt or a tool result. */
+export function formatNotes(notes: TeamNote[]) {
+  return notes
+    .map((n) => `- ${new Date(n.at).toISOString().slice(0, 16).replace("T", " ")} ${n.author}${n.to === "all" ? "" : ` → ${roleDef(n.to)?.title ?? n.to}`}: ${n.text}`)
+    .join("\n");
 }
 
 /** Pull the plain text out of an assistant entry's model messages. */
@@ -204,11 +243,51 @@ export function createTeam(host: TeamHost) {
     return p.project ? `This is the ${p.env ?? "dev"} environment of project ${p.project}.` : "";
   };
 
+  const teamNote = defineTool({
+    name: "team_note",
+    description:
+      "Leave a note in the team log: what you did, a decision, a changed contract, a trap, work left open. Every member " +
+      "gets the newest notes with their next task. Write it for someone who has not seen your work.",
+    parameters: Type.Object({
+      text: Type.String({ description: "The note: short, concrete, with file paths where they help." }),
+      to: Type.Optional(
+        Type.Union([Type.Literal("all"), ...ROLES.map((r) => Type.Literal(r.id))], { description: "Who it is for: all (default) or one role." }),
+      ),
+    }),
+    replay: "safe",
+    execute: async (args, api, ctx) => {
+      const me = await authorOf(api, ctx);
+      host.notes.add({ key: `note:${api.taskId}`, author: me, to: args.to ?? "all", text: args.text.trim().slice(0, 4000) });
+      return { content: [{ type: "text", text: "Noted in the team log." }] };
+    },
+  });
+
+  const teamNotes = defineTool({
+    name: "team_notes",
+    description: "Read the team log: what members did and decided, newest last.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Number({ description: "How many notes, newest first counted (default 30, max 200)." })),
+    }),
+    replay: "safe",
+    execute: async (args) => {
+      const notes = host.notes.list({ limit: Math.max(1, Math.min(200, Math.floor(args.limit ?? 30))) });
+      return { content: [{ type: "text", text: notes.length ? formatNotes(notes) : "The team log is empty." }] };
+    },
+  });
+
+  /** The author name for a note: the member's title, or "Lead". */
+  const authorOf = async (api: { agent: (ctx: never) => Promise<{ extensions: readonly Extension[] }> }, ctx: unknown) => {
+    const names = (await api.agent(ctx as never)).extensions.map((e) => e.name);
+    const member = MEMBER_ROLES.find((r) => names.includes(`team-${r.id}`));
+    return member?.title ?? "Lead";
+  };
+
   const members = new Map<TeamRoleId, Extension>(
     MEMBER_ROLES.map((role) => [
       role.id,
       defineExtension({
         name: `team-${role.id}`,
+        tools: [teamNote, teamNotes],
         sections: [section(`team-${role.id}`, () => [SHARED, role.prompt, context()].filter(Boolean).join("\n\n"), { tag: false })],
       }),
     ]),
@@ -245,8 +324,11 @@ export function createTeam(host: TeamHost) {
       api.output(`${role.title} is working on it (${model.modelId})…\n`);
       const child = await api.conversation(id as ConversationId, ctx);
       if (!child) throw Error("Team member conversation missing");
+      // The task carries the newest team notes for everyone and for this role, so the member starts with the context.
+      const notes = host.notes.list({ limit: 20, for: role.id });
+      const content = notes.length ? `${args.task}\n\n---\nTeam log (newest last; team_notes reads more):\n${formatNotes(notes)}` : args.task;
       const result = await (
-        await child.submit({ type: "input", content: args.task, requestId: `delegate:${api.taskId}` }, ctx)
+        await child.submit({ type: "input", content, requestId: `delegate:${api.taskId}` }, ctx)
       ).wait(ctx);
       const answer =
         result.status === "done" && result.type === "input"
@@ -255,6 +337,8 @@ export function createTeam(host: TeamHost) {
       const text = answer
         ? answerText(answer.model ?? [])
         : `The ${role.title} stopped without an answer (${result.status}): it was cut off, not refused. Check what it already did (git status, the files) and delegate the rest again, or give it to another member.`;
+      // Every report goes into the team log, so whoever works next sees what this member did.
+      if (answer) host.notes.add({ key: `report:${api.taskId}`, author: role.title, to: "all", text: text.slice(0, 4000) || "(no text)" });
       return {
         content: [{ type: "text", text: `${role.title} reports:\n${text || "(no text)"}` }],
         details: { conversationId: id, role: role.id, model: model.modelId },
@@ -264,7 +348,7 @@ export function createTeam(host: TeamHost) {
 
   const lead = defineExtension({
     name: "team",
-    tools: [delegate],
+    tools: [delegate, teamNote, teamNotes],
     sections: [section("team", () => [roleDef("lead")!.prompt, context()].filter(Boolean).join("\n\n"), { tag: false })],
   });
 
@@ -275,7 +359,7 @@ export function createTeam(host: TeamHost) {
     return {
       model: host.route(host.settings().models[role.id] ?? role.defaultModel),
       extensions: [CodingTools, members.get(role.id)!],
-      tools: toolsFor(role),
+      tools: [...toolsFor(role), teamNote, teamNotes],
     };
   };
 

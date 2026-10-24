@@ -7,12 +7,21 @@ import { once } from "node:events";
 import { join } from "node:path";
 import { AnthClient } from "../../anth-sdk/src/client.js";
 import type { JobRun, JobRunsDoc } from "../../anth-sdk/src/jobs.js";
-import { explainPush, explainVercel, githubRepo, lastUrl, parseVerdict } from "../src/ship.js";
+import { blocking, explainPush, explainVercel, githubRepo, lastUrl, parseVerdict } from "../src/ship.js";
 import { bootServer, faux, newToken, tempStore, until } from "./helpers.js";
 
 test("ship helpers: verdicts, GitHub remotes, deployment URLs", () => {
   assert.equal(parseVerdict("Looks fine.\nVERDICT: safe to merge"), "safe");
   assert.equal(parseVerdict("**VERDICT: needs owner approval (touches auth)**"), "owner");
+  // The error message carries the Blocking list, not the follow-ups.
+  const report = "Blocking:\n1. src/a.ts:3 save drops pages\nFollow-ups:\n- rename x\nVERDICT: changes requested";
+  assert.equal(blocking(report), "1. src/a.ts:3 save drops pages");
+  // "Non-blocking:" first is not the Blocking heading; bold and markdown headings work.
+  const reordered = "Non-blocking:\n- rename x\n**Blocking:**\n1. src/b.ts:9 publish ignores failed save\nVERDICT: changes requested";
+  assert.equal(blocking(reordered), "1. src/b.ts:9 publish ignores failed save");
+  assert.equal(blocking("## Blocking\n- src/c.ts:1 data loss\n## Follow-ups\n- tidy"), "- src/c.ts:1 data loss");
+  // No heading: the end of the report.
+  assert.match(blocking("Looks wrong.\nVERDICT: changes requested"), /VERDICT: changes requested/);
   assert.equal(parseVerdict("VERDICT: safe to merge\n...\nVERDICT: changes requested\n- missing test"), "changes");
   assert.equal(parseVerdict("Echo: no verdict here, but the word VERDICT: appears mid-line"), undefined);
   assert.equal(githubRepo("https://github.com/Alek0190/Anth-Agent.git"), "Alek0190/Anth-Agent");

@@ -182,6 +182,10 @@ export interface Phase {
   readState(path: string): Promise<JsonValue | undefined>;
   /** Run a subagent with read and bash in an owned child conversation; its tool calls become steps. */
   agent(prompt: string): Promise<string>;
+  /** Add a note to the session's team log once per (run, phase, key); nothing when the session has no team log. */
+  log(author: string, text: string, key?: string): void;
+  /** The newest team log notes, oldest first. */
+  notes(limit: number): { at: number; author: string; to: string; text: string }[];
   sleepUntil(at: number): Promise<void>;
 }
 
@@ -389,6 +393,11 @@ export interface JobsDeps {
   cwd: () => string;
   /** How a team member's child conversation is configured, and how it is named in the tree. */
   team?: { change: (role: TeamRoleId) => AgentChange; title: (role: TeamRoleId) => string; name: (id: number, title: string) => void };
+  /** The session's team log, so jobs leave their findings where the Lead and members read them. */
+  notes?: {
+    add(note: { key: string; author: string; to: string; text: string }): void;
+    list(opts: { limit: number }): { at: number; author: string; to: string; text: string }[];
+  };
 }
 
 const CHILD_INSTRUCTIONS =
@@ -582,6 +591,9 @@ export function createJobs(deps: JobsDeps) {
           return { value: r.out, detail: tail(r.out) || "(no output)" };
         }),
       note: (text, detail) => step("note", text, async () => ({ value: undefined, detail })),
+      log: (author, text, key = author) =>
+        deps.notes?.add({ key: `job:${task.id}:${spec.id}:${cp.iteration}:${key}`, author, to: "all", text: text.slice(0, 6000) }),
+      notes: (limit) => deps.notes?.list({ limit }) ?? [],
       progress: (done, total) => record((_r, phase) => void (phase.progress = { done, total })),
       saveState: (path, value) =>
         step("state", `update_state ${path}`, async () => {
