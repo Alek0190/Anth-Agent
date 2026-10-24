@@ -10,6 +10,7 @@
 //   "submitfix: <test command>" → one submit_fix call (incident agents)
 //   "delegate: <role> | <task>[ ;; <role> | <task>…]" → one delegate call per pair, all in the same turn
 //   "note: <text>" → one team_note call (team members and the Lead)
+//   "maxtokens?" → "maxTokens=<the request's output cap>"; "nocredits" → a 402 error like OpenRouter without credits
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
 import type { MutableModels } from "@earendil-works/pi-ai/models";
@@ -37,13 +38,20 @@ export function installFaux(models: MutableModels) {
     models: fauxModels.map((m) => ({ id: m.id, name: m.name, contextWindow: 128000, maxTokens: 8192 })),
     tokensPerSecond: 400,
   });
-  const reply: FauxResponseFactory = (context) => {
+  const reply: FauxResponseFactory = (context, options) => {
     handle.appendResponses([reply]);
     const messages = context.messages as unknown as AnyMessage[];
     const last = messages.at(-1);
     if (last?.role === "toolResult")
       return fauxAssistantMessage(fauxText(`Tool finished: ${textOf(last).trim().slice(0, 400)}`));
     const prompt = textOf([...messages].reverse().find((m) => m.role === "user")).trim();
+    // "maxtokens?" answers with the output cap the request carried; "nocredits" fails like OpenRouter without credits.
+    if (prompt === "maxtokens?") return fauxAssistantMessage(fauxText(`maxTokens=${options?.maxTokens ?? "none"}`));
+    if (prompt.startsWith("nocredits"))
+      return fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: '402: {"message":"This request requires more credits, or fewer max_tokens.","code":402}',
+      });
     if (prompt.startsWith("!"))
       return fauxAssistantMessage([fauxText("Running it."), fauxToolCall("bash", { command: prompt.slice(1).trim() })], {
         stopReason: "toolUse",

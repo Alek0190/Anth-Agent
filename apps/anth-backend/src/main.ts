@@ -34,6 +34,7 @@ const alerts =
     alertSettings,
   );
 alerts?.start();
+store.onProblem((key, text) => void alerts?.problem(key, text));
 
 // The Lead hears how its ship and rollback runs ended, and acts on it without the owner relaying it.
 const autopilot = new Autopilot(
