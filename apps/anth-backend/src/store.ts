@@ -84,6 +84,12 @@ export const DURABLE_VERSION = "1.0.3";
  * one exception: team_note only adds a note to the session's log, which is how read-only reviewers hand over their
  * findings, so it is not a write tool and stays offered to read-only agents.
  */
+/** The output token cap per model call: ANTH_MAX_OUTPUT_TOKENS, default 32000, at least 1024. */
+export function maxOutputTokens(env: NodeJS.ProcessEnv = process.env) {
+  const n = Number(env.ANTH_MAX_OUTPUT_TOKENS);
+  return Number.isFinite(n) && n >= 1024 ? Math.floor(n) : 32000;
+}
+
 export const WRITE_TOOLS = new Set([
   "bash",
   "write",
@@ -292,6 +298,17 @@ export class Store {
   }
 
   // ------------------------------------------------------------ change feed
+
+  private problemListeners = new Set<(key: string, text: string) => void>();
+  /** Problems only the owner can fix (the provider account), for Telegram. */
+  onProblem(fn: (key: string, text: string) => void) {
+    this.problemListeners.add(fn);
+    return () => void this.problemListeners.delete(fn);
+  }
+  reportProblem(key: string, text: string) {
+    console.log(`problem: ${text}`);
+    for (const fn of this.problemListeners) fn(key, text);
+  }
 
   subscribe(fn: () => void) {
     this.listeners.add(fn);
@@ -712,6 +729,7 @@ export class Store {
         settings: () => ({ enabled: true, models: this.teamModels(row.id) }),
         notes: { add: (n) => this.addTeamNote(row.id, n), list: (opts) => this.teamNotes(row.id, opts) },
         route: (modelId) => this.routedModel({ provider: "openrouter", modelId }),
+        problem: (key, text) => this.reportProblem(key, text),
         name: (conversationId, name) => {
           try {
             this.setAgentName(row, conversationId, name);
@@ -778,6 +796,9 @@ export class Store {
               return compaction();
             },
             progress: { partialIntervalMs: 100, outputIntervalMs: 100 },
+            // Ask for at most this many output tokens per model call. Without it OpenRouter reserves the model's whole
+            // output budget (128k for some), and a low balance refuses every call with 402 before it starts.
+            stream: { maxTokens: maxOutputTokens() } as never,
           },
           onReport: (e) => console.error("[durable]", String(e)),
         },

@@ -137,3 +137,11 @@ curl -s -X POST $U/v1/sessions -H "Authorization: Bearer $T" -H 'content-type: a
 Members and the Lead write to it with the `team_note` tool, and every member's final report is added by itself. Each
 delegated task carries the newest 20 notes for everyone and for that role, so the next member starts with what the
 others did and decided. `team_notes` reads more.
+
+## Model calls and provider problems
+
+Every model call asks for at most `ANTH_MAX_OUTPUT_TOKENS` output tokens (default 32000). Without a cap, OpenRouter
+reserves credit for the model's whole output budget (128k for some models), and a low balance refuses every call with
+402 before it starts. When a team member is refused for an account reason (no credits, a bad or limited key), the Lead is
+told it is an account problem, not to retry, and to report; the owner gets a "Needs you" message on Telegram (at most
+every six hours per problem).

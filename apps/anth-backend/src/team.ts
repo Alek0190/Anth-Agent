@@ -195,9 +195,22 @@ export interface TeamSettings {
   models: Partial<Record<TeamRoleId, string>>;
 }
 
+/**
+ * An account problem with the model provider (no credits, a bad or limited key): the same for every retry, so the Lead
+ * must report it instead of delegating again. Returns a short label, or undefined for anything else.
+ */
+export function accountProblem(text: string): string | undefined {
+  if (/\b402\b|more credits|insufficient (credits|funds|balance)|out of credits|credit limit/i.test(text)) return "out of credits";
+  if (/\b401\b|invalid api key|no auth credentials|user not found|key (is )?(disabled|revoked)/i.test(text)) return "the API key was refused";
+  if (/\b403\b.*(key|limit)|key limit|spend limit/i.test(text)) return "the API key's limit is reached";
+  return undefined;
+}
+
 export interface TeamHost {
   /** The session's current team settings, read at every delegation so a change applies to the next member. */
   settings(): TeamSettings;
+  /** Tell the owner about a problem only they can fix (the provider account); at most once in a while. */
+  problem?(key: string, text: string): void;
   /** Route a role's model id to this device's provider (the faux model in tests). */
   route(modelId: string): ModelRef;
   /** Name a member's conversation in the tree, e.g. "Backend developer". */
@@ -334,11 +347,21 @@ export function createTeam(host: TeamHost) {
         result.status === "done" && result.type === "input"
           ? await api.commit((tx) => tx.entry(AssistantEntry, result.answer), ctx)
           : undefined;
-      const text = answer
-        ? answerText(answer.model ?? [])
-        : `The ${role.title} stopped without an answer (${result.status}): it was cut off, not refused. Check what it already did (git status, the files) and delegate the rest again, or give it to another member.`;
+      // Why it stopped: the settlement's reason and detail, or the error on its last model message.
+      const settled = result as { reason?: string; detail?: unknown };
+      const errorOf = (answer?.model ?? []).map((m) => (m as { errorMessage?: string }).errorMessage).find(Boolean);
+      const why = [settled.reason, settled.detail === undefined ? "" : JSON.stringify(settled.detail), errorOf].filter(Boolean).join(": ").slice(0, 600);
+      const reply = answer ? answerText(answer.model ?? []) : "";
+      // Only the error itself is checked: a member's report often mentions 401 or 403 about the app it reviews.
+      const problem = why ? accountProblem(why) : undefined;
+      if (problem) host.problem?.(`provider:${problem}`, `The model provider refused a request for the ${role.title}: ${problem}. ${why}`);
+      const text = problem
+        ? `The ${role.title} could not run: the model provider refused the request (${problem}). ${why}\nThis is an account problem, not the task: delegating again fails the same way. Do not retry. Report it to the owner (it needs credits or a working key) and stop until they say it is fixed.`
+        : answer && reply
+          ? reply
+          : `The ${role.title} stopped without an answer (${result.status}${why ? `: ${why}` : ""}): it was cut off, not refused. Check what it already did (git status, the files) and delegate the rest again, or give it to another member.`;
       // Every report goes into the team log, so whoever works next sees what this member did.
-      if (answer) host.notes.add({ key: `report:${api.taskId}`, author: role.title, to: "all", text: text.slice(0, 4000) || "(no text)" });
+      if (answer && reply && !problem) host.notes.add({ key: `report:${api.taskId}`, author: role.title, to: "all", text: text.slice(0, 4000) || "(no text)" });
       return {
         content: [{ type: "text", text: `${role.title} reports:\n${text || "(no text)"}` }],
         details: { conversationId: id, role: role.id, model: model.modelId },

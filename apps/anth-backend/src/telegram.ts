@@ -322,6 +322,15 @@ export class Alerts {
     if (firstCompletedScan) this.setMeta("completedBaseline", String(Date.now()));
   }
 
+  /** Tell the owner about a problem only they can fix, at most once per key every six hours. */
+  async problem(key: string, text: string) {
+    if (!this.config.chatId) return;
+    const last = Number(this.meta(`problem:${key}`) ?? 0);
+    if (Date.now() - last < 6 * 3600_000) return;
+    this.setMeta(`problem:${key}`, String(Date.now()));
+    await this.send(`⚠️ <b>Needs you</b>\n${esc(clip(text, 700))}`).catch((e) => this.log(`problem alert failed: ${(e as Error).message}`));
+  }
+
   /** Call once for this alert, one call at a time; say in the chat that a call is coming or why it could not. */
   private ring(row: AlertRow, text: string) {
     this.db.prepare("UPDATE alerts SET rungAt=? WHERE id=?").run(Date.now(), row.id);
