@@ -13,7 +13,14 @@
 #   refresh  <app>         rewrite the app's Caddyfile for the live slot (after its password changed)
 #
 # A password (BASIC_AUTH_USER and BASIC_AUTH_HASH in app.env, set by `just server lock`) protects production and
-# preview. /anth-health stays open for Anth-Agent's checks: it answers with the app's HEALTH_PATH, nothing else.
+# preview, or only the preview (BASIC_AUTH_SCOPE=preview: the public product with a private preview). /anth-health stays
+# open for Anth-Agent's checks: it answers with the app's HEALTH_PATH, nothing else.
+#
+# Every preview starts from a fresh copy of production's data (PREVIEW_DATA=copy, the default; "empty" keeps the
+# preview's own data), so a release is tried on the data it will meet. The copy is made only when the preview has a
+# password: production data holds real users' accounts and messages. SQLite databases are copied with SQLite's own
+# backup, consistent even while production writes. The preview runs with ANTH_PREVIEW=1, so the app can keep outbound
+# email and the like switched off there.
 #
 # Per app, /srv/anth/<app>/app.env (written by server-setup.sh) holds DOMAINS, PREVIEW_DOMAIN, BASE_PORT (production
 # slots BASE_PORT and BASE_PORT+1, preview BASE_PORT+2), APP_PORT (the port inside the container), HEALTH_PATH and
@@ -73,19 +80,62 @@ health() {
 
 # Run an image on a host port, with its env file and data folder. Replaces any container of that name.
 start() {
-  local name="$1" tag="$2" port="$3" envfile="$4" data="$5"
+  local name="$1" tag="$2" port="$3" envfile="$4" data="$5" extra="${6:-}"
   docker rm -f "$name" >/dev/null 2>&1 || true
   mkdir -p "$data"
   local envarg=()
   [ -f "$envfile" ] && envarg=(--env-file "$envfile")
+  [ -n "$extra" ] && envarg+=(-e "$extra")
   docker run -d --name "$name" --restart unless-stopped \
     -p "127.0.0.1:$port:$APP_PORT" -e "PORT=$APP_PORT" "${envarg[@]}" \
     -v "$data:$DATA_DIR" "$tag" >/dev/null
 }
 
+# Copy FROM's contents over TO's, then replace every SQLite database in the copy with a consistent snapshot made by
+# SQLite's backup (node:sqlite), since a plain file copy of a database being written can be torn. Without node, or with a
+# node too old for node:sqlite, the plain copy stays. Runs inside a throwaway container of the new image as its usual
+# user, so the copy belongs to the same user the preview runs as; or directly with ANTH_DATA_COPY=local (tests).
+COPY_JS='const fs=require("fs"),path=require("path");
+const from=process.env.FROM,to=process.env.TO;
+const walk=(d)=>fs.readdirSync(d,{withFileTypes:true}).flatMap((e)=>e.isDirectory()?walk(path.join(d,e.name)):e.isFile()?[path.join(d,e.name)]:[]);
+(async()=>{const {DatabaseSync,backup}=require("node:sqlite");for(const f of walk(from)){const fd=fs.openSync(f,"r");const head=Buffer.alloc(16);fs.readSync(fd,head,0,16,0);fs.closeSync(fd);
+if(head.toString("latin1")!=="SQLite format 3\0")continue;const rel=path.relative(from,f);const dest=path.join(to,rel);
+for(const x of [dest,dest+"-wal",dest+"-shm",dest+"-journal"])fs.rmSync(x,{force:true});
+const db=new DatabaseSync(f,{readOnly:true});try{await backup(db,dest);}finally{db.close();}
+const st=fs.statSync(f);fs.chmodSync(dest,st.mode&0o7777);if(process.getuid&&process.getuid()===0)fs.chownSync(dest,st.uid,st.gid);
+console.error("anth-deploy: consistent snapshot of "+rel);}})()
+.catch((e)=>{console.error("anth-deploy: SQLite snapshot failed ("+e.message+"); the preview keeps the plain copy");process.exit(0);});'
+COPY_SH='set -e
+rm -rf "$TO"/* "$TO"/.[!.]* "$TO"/..?* 2>/dev/null || true
+cp -a "$FROM"/. "$TO"/
+if command -v node >/dev/null 2>&1; then node -e "$COPY_JS"; fi'
+
+# Give the preview a fresh copy of production's data, when that is allowed and safe; otherwise leave its data alone.
+refresh_preview_data() {
+  local tag="$1"
+  if [ "${PREVIEW_DATA:-copy}" != "copy" ]; then
+    log "preview keeps its own data (PREVIEW_DATA=${PREVIEW_DATA})"
+    return 0
+  fi
+  if [ -z "${BASIC_AUTH_HASH:-}" ]; then
+    log "the preview has no password, so it does not get a copy of production's data (real users' data); it keeps its own. To test previews on production data: just server lock <host> $app <user> preview"
+    return 0
+  fi
+  [ -d "$dir/data" ] || return 0
+  mkdir -p "$dir/preview-data"
+  log "copying production's data into the preview"
+  if [ "${ANTH_DATA_COPY:-docker}" = "local" ]; then
+    FROM="$dir/data" TO="$dir/preview-data" COPY_JS="$COPY_JS" sh -c "$COPY_SH" >&2 && return 0
+  elif docker run --rm --entrypoint sh -e FROM=/from -e TO=/to -e COPY_JS="$COPY_JS" \
+    -v "$dir/data:/from" -v "$dir/preview-data:/to" "$tag" -c "$COPY_SH" >&2; then
+    return 0
+  fi
+  log "copying production's data failed; the preview starts with the data it had"
+}
+
 # One site block: /anth-health always open (it serves HEALTH_PATH), everything else behind the password when one is set.
 site() {
-  local domains="$1" port="$2" extra="$3"
+  local domains="$1" port="$2" extra="$3" protect="${4:-yes}"
   echo "$domains {"
   echo "	encode gzip"
   [ -n "$extra" ] && echo "	$extra"
@@ -94,7 +144,7 @@ site() {
   echo "		reverse_proxy 127.0.0.1:$port"
   echo "	}"
   echo "	handle {"
-  if [ -n "${BASIC_AUTH_USER:-}" ] && [ -n "${BASIC_AUTH_HASH:-}" ]; then
+  if [ "$protect" = yes ] && [ -n "${BASIC_AUTH_USER:-}" ] && [ -n "${BASIC_AUTH_HASH:-}" ]; then
     echo "		basicauth {"
     echo "			$BASIC_AUTH_USER $BASIC_AUTH_HASH"
     echo "		}"
@@ -109,7 +159,8 @@ caddyfile() {
   local prod_port="$1"
   {
     echo "# Written by anth-deploy. Production on 127.0.0.1:$prod_port, preview on 127.0.0.1:$((BASE_PORT + 2))."
-    site "$DOMAINS" "$prod_port" ""
+    # BASIC_AUTH_SCOPE=preview: production is public, only the preview asks for the password.
+    site "$DOMAINS" "$prod_port" "" "$([ "${BASIC_AUTH_SCOPE:-all}" = preview ] && echo no || echo yes)"
     echo
     site "$PREVIEW_DOMAIN" "$((BASE_PORT + 2))" 'header X-Robots-Tag "noindex, nofollow"'
   } >"$dir/Caddyfile.new"
@@ -171,7 +222,10 @@ case "$cmd" in
     log "building $(image "$sha")"
     docker build -q -t "$(image "$sha")" "$release" >&2
     port=$((BASE_PORT + 2))
-    start "anth-$app-preview" "$(image "$sha")" "$port" "$dir/preview.env" "$dir/preview-data"
+    # Stop the old preview before its data is replaced, then start the new one on a fresh copy of production's.
+    docker rm -f "anth-$app-preview" >/dev/null 2>&1 || true
+    refresh_preview_data "$(image "$sha")"
+    start "anth-$app-preview" "$(image "$sha")" "$port" "$dir/preview.env" "$dir/preview-data" "ANTH_PREVIEW=1"
     health "$port" || { docker logs --tail 50 "anth-$app-preview" >&2 || true; die "the preview did not answer on $HEALTH_PATH"; }
     # Keep the last five releases on disk; images stay until pruned.
     ls -1t "$dir/releases" | tail -n +6 | while read -r old; do rm -rf "${dir:?}/releases/$old"; done

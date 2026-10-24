@@ -141,6 +141,24 @@ The browser asks once for user `anthward` and the password. Only a bcrypt hash i
 
 `/anth-health` stays open, so Anth-Agent can still check the site: the ship's preview and production checks use it on app servers, and **Watch** should check it too (Watch → paths: `/anth-health`). It answers with the app's health path (`--health-path`, default `/`), so make sure that page shows nothing private.
 
+## Go public, keep the preview private
+
+Once the site has its own logins, open production to everyone and keep only the preview behind the password:
+
+```bash
+just server lock root@APP_IP anthwebbuilder anthward preview
+```
+
+## Previews run on a copy of production's data
+
+Every preview starts from a fresh copy of production's data folder, so a release is tried on the accounts, sites and settings it will meet when it goes live. Bugs that only show up on real data (a missing seed, a migration that breaks old rows) show up on the preview, before you approve.
+
+- **Only behind a password.** Production data holds real users' accounts and messages, so the copy is made only while the preview is locked (`just server lock`, either scope). Without a password the preview keeps its own data, and the ship log says why.
+- **Consistent.** SQLite databases are copied with SQLite's own backup, so the copy is whole even while production is writing. Production's data is only read, never changed.
+- **Fresh every time.** Changes made on the preview are thrown away by the next ship.
+- **The app knows it is a preview.** The preview container gets `ANTH_PREVIEW=1`. Use it in the app to keep real email, payments and other outside effects switched off there, since the copied accounts belong to real people. Give the preview its own keys in `preview.env` (test-mode payment keys, no mail server).
+- **Opt out:** add `PREVIEW_DATA=empty` to `/srv/anth/anthwebbuilder/app.env` and the preview keeps its own data. `just server setup` keeps that line when you run it again.
+
 ## Day to day
 
 - **Ship:** ask the Lead, or Tasks → Ship. Preview at `https://preview.anthwebbuilder.com`, a pull request on GitHub, then **Approve production**.

@@ -28,15 +28,15 @@ keygen NAME="anth_deploy":
 status HOST APP:
     ssh -i ~/.anth/anth_deploy "anth@$1" status "$2"
 
-# Put an app behind a password (production and preview); Anth-Agent's checks use /anth-health, which stays open
+# Password-protect an app: SCOPE all (production + preview) or preview (public product, private preview on prod data)
 [no-cd]
-lock HOST APP USER="anthward":
+lock HOST APP USER="anthward" SCOPE="all":
     #!/usr/bin/env zsh
     set -eu
     read -rs "pw?Password for $3 on $2: "; echo
     [ ${#pw} -ge 10 ] || { echo "Use at least 10 characters."; exit 1; }
     scp -q deploy/anth-deploy.sh "$1:/tmp/anth-deploy"
-    { printf 'PW=%q\n' "$pw"; cat deploy/server-lock.sh; } | ssh "$1" bash -s -- "$2" "$3"
+    { printf 'PW=%q\n' "$pw"; cat deploy/server-lock.sh; } | ssh "$1" bash -s -- "$2" "$3" "$4"
 
 # Remove an app's password
 [no-cd]
