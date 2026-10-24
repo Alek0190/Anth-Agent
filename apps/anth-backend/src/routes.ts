@@ -155,7 +155,11 @@ export function v1(store: Store) {
   // The team log: what members did and decided, oldest first.
   r.get(
     "/sessions/:s/team/notes",
-    route(async (req, res) => res.json(store.teamNotes(L(res).row.id, { limit: Math.max(1, Math.min(500, Number(req.query.limit) || 100)) }))),
+    route(async (req, res) => {
+      const raw = req.query.limit === undefined ? "100" : String(req.query.limit);
+      if (!/^\d+$/.test(raw)) throw invalid("limit must be a whole number from 1 to 500");
+      res.json(store.teamNotes(L(res).row.id, { limit: Math.max(1, Math.min(500, Number(raw))) }));
+    }),
   );
   r.post(
     "/sessions/:s/agents",

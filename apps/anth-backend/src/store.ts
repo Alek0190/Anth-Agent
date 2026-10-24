@@ -78,7 +78,12 @@ import { JOB_RUNS_DOC, type JobRun } from "../../anth-sdk/src/jobs.js";
 
 export const DURABLE_VERSION = "1.0.3";
 
-/** Tools that create, update or delete: shell, files, App State, job runs, sessions, pages and subagents. */
+/**
+ * Tools that create, update or delete: shell, files, App State, job runs, sessions, pages and subagents. "Read only"
+ * means none of these: the agent cannot change the project, App State, jobs or anything outside. The team log is the
+ * one exception: team_note only adds a note to the session's log, which is how read-only reviewers hand over their
+ * findings, so it is not a write tool and stays offered to read-only agents.
+ */
 export const WRITE_TOOLS = new Set([
   "bash",
   "write",

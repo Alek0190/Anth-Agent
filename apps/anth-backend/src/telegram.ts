@@ -218,6 +218,7 @@ export class Alerts {
   /** Compare what needs you now with what was already sent, and send, edit or call. */
   private async scanOnce() {
     const firstScan = this.meta("baseline") === undefined;
+    const firstCompletedScan = this.meta("completedBaseline") === undefined;
     const runs = await this.host.alertRuns();
     const byRun = new Map(runs.map((r) => [`${r.session.id}:${r.conversationId}:${r.run.id}`, r]));
 
@@ -267,7 +268,9 @@ export class Alerts {
         const key = `completed:${at}`;
         if (this.alert(key)) continue;
         this.insert(key, "failed", {}, "closed");
-        if (!firstScan) await this.send(`✅ <b>${esc(run.title)} done</b> · ${esc(where(session))}\n${esc(clip(run.result ?? "", 400))}`);
+        // "Done" messages came later than the first baseline: on an upgraded install, runs that went live before them
+        // are old news too, so their own baseline is set after the first scan that knows about them.
+        if (!firstScan && !firstCompletedScan) await this.send(`✅ <b>${esc(run.title)} done</b> · ${esc(where(session))}\n${esc(clip(run.result ?? "", 400))}`);
       }
     }
 
@@ -316,6 +319,7 @@ export class Alerts {
     }
 
     if (firstScan) this.setMeta("baseline", String(Date.now()));
+    if (firstCompletedScan) this.setMeta("completedBaseline", String(Date.now()));
   }
 
   /** Call once for this alert, one call at a time; say in the chat that a call is coming or why it could not. */

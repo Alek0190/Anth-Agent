@@ -77,7 +77,9 @@ const auto = (v: unknown) => v === undefined || v === "auto" || v === "";
 /** The reviewer's verdict: the last line that starts with "VERDICT:". */
 /** The blocking findings of a review report, for an error message (the whole report is in the team log). */
 export function blocking(report: string) {
-  const m = /blocking[^\n]*\n([\s\S]*?)(\n\s*\**\s*(follow-?ups?|non-blocking)\b|$)/i.exec(report);
+  // The heading must be a line of its own starting with "Blocking" ("Non-blocking:" is not it), optionally bold or a
+  // markdown heading; the list ends at the next heading line or the verdict.
+  const m = /^[ \t]*(?:#+[ \t]*)?\**[ \t]*blocking\b[^\n]*\n([\s\S]*?)(?=^[ \t]*(?:#+[ \t]*)?\**[ \t]*(?:follow-?ups?|non-blocking|verdict)\b|(?![\s\S]))/im.exec(report);
   return (m ? m[1] : report.split("\n").slice(-6).join("\n")).trim().slice(0, 1500);
 }
 
@@ -376,12 +378,13 @@ const ship: Record<string, Handler> = {
         ? `${text}\n\nEarlier reviews of this work found the items below. Check each one first and say whether it is fixed. ` +
           `Then add only new blocking problems; do not raise new non-blocking points as blockers.\n\n${earlier.slice(-6000)}`
         : text;
+    // Each report goes to the team log as soon as it exists, so the developers who fix it and the next review see the
+    // same list, even when the security review after it fails.
     const review = await p.member("reviewer", withEarlier(ask("Review")));
-    const security = await p.member("security", withEarlier(ask("Check the security of")));
-    const verdict = parseVerdict(review);
-    // Both reports go to the team log, so the developers who fix them and the next review see the same list.
     p.log(`Ship review ${p.run.n}: reviewer`, review);
+    const security = await p.member("security", withEarlier(ask("Check the security of")));
     p.log(`Ship review ${p.run.n}: security`, security);
+    const verdict = parseVerdict(review);
     if (verdict === "changes") throw Error(`The reviewer requested changes (full report in the team log). ${blocking(review)}`);
     return {
       done: `${stat.trim() || "Reviewed"}. Reviewer: ${verdict === "safe" ? "safe to merge" : verdict === "owner" ? "needs your approval" : "no verdict"}`,

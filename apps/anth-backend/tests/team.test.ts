@@ -64,6 +64,11 @@ test("agent team: on for project sessions, delegate runs members with their own 
     assert.deepEqual(await offered(backend!.id), ["bash", "edit", "read", "team_note", "team_notes", "write"]);
     // Reviewers still cannot write files; notes go to the team log, not the project.
     assert.deepEqual(await offered(reviewer!.id), ["bash", "read", "team_note", "team_notes"]);
+    // Read only removes every tool that changes the project, and keeps the team log: that is how it reports.
+    await client.agent(built.id, backend!.id).configure({ readOnly: true });
+    assert.deepEqual(await offered(backend!.id), ["read", "team_note", "team_notes"]);
+    assert.equal((await client.agent(built.id, backend!.id).get()).config.readOnly, true);
+    await client.agent(built.id, backend!.id).configure({ readOnly: false });
     // Members get their role prompt, not the Lead's tools.
     assert.equal((await client.agent(built.id, backend!.id).get()).tools.some((t) => t.name === "delegate"), false);
 

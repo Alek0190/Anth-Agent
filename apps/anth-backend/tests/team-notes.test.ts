@@ -42,6 +42,13 @@ test("team log: a member's note and report reach the next member, and the log is
     );
     assert.equal(notes[0].text, "Pages API moved to /api/v2/pages");
     assert.equal(notes[0].to, "all");
+    // A limit that is not a whole number is the client's mistake: 400, not a database error.
+    for (const bad of ["1.5", "abc", "-2"]) {
+      const res = await fetch(`${server.base}/v1/sessions/${s.id}/team/notes?limit=${bad}`, { headers: { authorization: `Bearer ${token}` } });
+      assert.equal(res.status, 400, `limit=${bad}`);
+    }
+    const one = await fetch(`${server.base}/v1/sessions/${s.id}/team/notes?limit=1`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(((await one.json()) as unknown[]).length, 1);
   } finally {
     await server.stop();
     await t.cleanup();

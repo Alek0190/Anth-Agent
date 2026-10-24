@@ -2,6 +2,7 @@
 // failures and incidents (old ones skipped on first start), and calls. Then the real backend: a button press approves
 // a durable job run.
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import { once } from "node:events";
@@ -297,6 +298,40 @@ test("alerts: a failed ship the Lead is fixing says so; going live is announced;
     assert.match(tg.sent().at(-1)!.text, /🔴 <b>Ship to production failed<\/b> · acme\/site · stuck on the same problem/);
   } finally {
     await alerts.stop();
+    tg.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("alerts: after an upgrade, ships that went live earlier stay quiet; the next one is announced", async () => {
+  const tg = await fakeTelegram("T0K");
+  const dataDir = mkdtempSync(join(tmpdir(), "anth-tg-"));
+  const runs = new Map<number, JobRun>([[1, run(1, { status: "completed", approval: undefined, startedAt: 1, result: "old release" })]]);
+  const host: AlertsHost = {
+    name: "box",
+    alertRuns: async () => [...runs.values()].map((r) => ({ session, conversationId: 7, agent: "Main", run: r })),
+    approveRun: async () => {},
+    incidents: () => [],
+    subscribe: () => () => {},
+  };
+  const config = () => alertsConfig({ TELEGRAM_BOT_TOKEN: "T0K", TELEGRAM_CHAT_ID: String(CHAT), ANTH_TELEGRAM_API: tg.api }, dataDir)!;
+  try {
+    // An install from before "done" messages: its baseline exists, the completed-runs baseline does not.
+    const before = new DatabaseSync(join(dataDir, "telegram.db"));
+    before.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES('baseline','1')");
+    before.close();
+    const alerts = new Alerts(host, config(), () => {});
+    try {
+      await alerts.scan();
+      assert.equal(tg.sent().length, 0, "the release from before the upgrade is not news");
+      runs.set(2, run(2, { status: "completed", approval: undefined, startedAt: 2, result: "https://site.test answers 200" }));
+      await alerts.scan();
+      assert.equal(tg.sent().length, 1);
+      assert.match(tg.sent()[0].text, /✅ <b>Ship to production done<\/b>[\s\S]*answers 200/);
+    } finally {
+      await alerts.stop();
+    }
+  } finally {
     tg.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
