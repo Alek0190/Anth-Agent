@@ -153,8 +153,9 @@ just server lock root@APP_IP anthwebbuilder anthward preview
 
 Every preview starts from a fresh copy of production's data folder, so a release is tried on the accounts, sites and settings it will meet when it goes live. Bugs that only show up on real data (a missing seed, a migration that breaks old rows) show up on the preview, before you approve.
 
-- **Only behind a password.** Production data holds real users' accounts and messages, so the copy is made only while the preview is locked (`just server lock`, either scope). Without a password the preview keeps its own data, and the ship log says why.
-- **Consistent.** SQLite databases are copied with SQLite's own backup, so the copy is whole even while production is writing. Production's data is only read, never changed.
+- **Only behind a password.** Production data holds real users' accounts and messages, so the copy is made only while the preview is locked (`just server lock`, either scope). Without a password the preview keeps its own data, and the ship log says why. `just server unlock` removes the copy from the preview before the preview opens, and starts the preview again on empty data.
+- **Consistent.** SQLite databases are copied with SQLite's own backup, so the copy is whole even while production is writing. The copy runs in a container with production's data mounted read-only and no network, so it can never change production.
+- **All or nothing.** The copy is made in a separate folder and replaces the preview's data only once it is complete. If it fails, the preview keeps the data it had.
 - **Fresh every time.** Changes made on the preview are thrown away by the next ship.
 - **The app knows it is a preview.** The preview container gets `ANTH_PREVIEW=1`. Use it in the app to keep real email, payments and other outside effects switched off there, since the copied accounts belong to real people. Give the preview its own keys in `preview.env` (test-mode payment keys, no mail server).
 - **Opt out:** add `PREVIEW_DATA=empty` to `/srv/anth/anthwebbuilder/app.env` and the preview keeps its own data. `just server setup` keeps that line when you run it again.

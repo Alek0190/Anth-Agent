@@ -32,6 +32,6 @@ fi
 if [ -f "$root/$app/current" ]; then
   if id anth >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then su -s /bin/bash anth -c "$deploy refresh $app"; else "$deploy" refresh "$app"; fi
 fi
-if [ -z "${PW:-}" ]; then echo "Unlocked: $app and its preview are open to everyone. Previews no longer get a copy of production's data."
+if [ -z "${PW:-}" ]; then echo "Unlocked: $app and its preview are open to everyone. Previews no longer get a copy of production's data; a copy the preview had is removed before it opens."
 elif [ "$scope" = preview ]; then echo "Locked the preview: it asks for user $user and the password; production is public. Previews now run on a copy of production's data."
 else echo "Locked: $app and its preview ask for user $user and the password."; fi
