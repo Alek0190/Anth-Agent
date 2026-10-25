@@ -7,6 +7,7 @@ import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import type { Activity, DeviceTree, Frame, StreamScope } from "../../anth-sdk/src/api.js";
 import { AGENT_DOC_KINDS, DEVICE_DOC_KINDS, type SessionRow, type Store } from "./store.js";
 import { invalid } from "./errors.js";
+import { withoutImageData } from "./attachments.js";
 
 const MAX_BUFFER = 2_000_000;
 
@@ -201,7 +202,7 @@ export async function agentStream(
   const sse = openSse(res, { kind: "agent", sessionId: row.id, agentId: c.id as number });
   sse.send({
     type: "snapshot",
-    snapshot: JSON.parse(JSON.stringify(stream.snapshot)),
+    snapshot: withoutImageData(stream.snapshot),
     inbox: await store.inbox(h, c),
   });
   const pushDocs = coalesce(async () => {
@@ -211,7 +212,7 @@ export async function agentStream(
   await pushDocs.now();
   stream.start(async (events) => {
     if (sse.closed) return;
-    sse.send({ type: "batch", events: JSON.parse(JSON.stringify(events)) });
+    sse.send({ type: "batch", events: withoutImageData(events) });
     if (events.some((e) => e.type === "inbox_update" || e.type === "snapshot"))
       sse.send({ type: "inbox", items: await store.inbox(h, c) });
   });

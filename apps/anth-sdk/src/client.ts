@@ -16,6 +16,7 @@ import type {
   Incident,
   Page,
   ProjectSummary,
+  MessageAttachment,
   SendResult,
   SessionSummary,
   TaskOutcome,
@@ -287,12 +288,13 @@ export class AgentHandle {
   rename(name: string) {
     return this.client.request<AgentSummary>("PATCH", this.base, { name });
   }
-  send(content: string, whenBusy: WhenBusy = "followUp", requestId = newId(), waitMs?: number) {
+  /** Send a message, with images if given (see MessageAttachment); a retry with the same requestId is admitted once. */
+  send(content: string, whenBusy: WhenBusy = "followUp", requestId = newId(), waitMs?: number, attachments?: MessageAttachment[]) {
     return this.client.request<SendResult>(
       "POST",
       `${this.base}/messages`,
-      { content, whenBusy, requestId, waitMs },
-      { timeoutMs: (waitMs ?? 0) + 20_000 },
+      { content, whenBusy, requestId, waitMs, ...(attachments?.length ? { attachments } : {}) },
+      { timeoutMs: (waitMs ?? 0) + (attachments?.length ? 120_000 : 20_000) },
     );
   }
   withdraw(submissionId: number) {

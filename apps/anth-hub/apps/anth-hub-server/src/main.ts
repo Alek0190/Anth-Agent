@@ -61,7 +61,14 @@ const safe =
 
 const app = express();
 app.disable("x-powered-by");
-app.use("/api", guard(allowedHosts), express.json({ limit: "256kb" }));
+// A message to an agent may carry images (the device checks them: 4 at most, 8 MB each, 16 MB together); every other
+// body stays small.
+const smallJson = express.json({ limit: "256kb" });
+const messageJson = express.json({ limit: "32mb" });
+const MESSAGES = /^\/devices\/[^/]+\/v1\/sessions\/[^/]+\/agents\/[^/]+\/messages\/?$/;
+app.use("/api", guard(allowedHosts), (req, res, next) =>
+  (req.method === "POST" && MESSAGES.test(req.path) ? messageJson : smallJson)(req, res, next),
+);
 
 app.get("/api/network", (_req, res) => res.json({ configFile, devices: monitor.network() }));
 // Devices are configured in anth-network.yaml and `just net register`; the hub only reads them.
@@ -91,6 +98,21 @@ app.put(
 );
 app.all("/api/devices/:id/v1/{*rest}", proxy(registry, monitor));
 app.use("/api", (_req, res) => res.status(404).json(err("not_found", "API route not found")));
+// Bodies the JSON parser refused (too large, not JSON): a JSON error the hub can show, not Express's HTML page.
+app.use("/api", ((e, _req, res, next) => {
+  if (res.headersSent || !(e as { type?: string }).type?.startsWith("entity.")) return next(e);
+  const tooLarge = (e as { type: string }).type === "entity.too.large";
+  res
+    .status(tooLarge ? 413 : 400)
+    .json(
+      err(
+        "invalid",
+        tooLarge
+          ? "Too large: attach at most 4 images, 8 MB each and 16 MB together"
+          : "Body must be valid JSON",
+      ),
+    );
+}) as express.ErrorRequestHandler);
 
 const server = createServer(app);
 let vite: Awaited<ReturnType<(typeof import("vite"))["createServer"]>> | undefined;

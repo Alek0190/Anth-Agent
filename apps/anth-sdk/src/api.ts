@@ -407,11 +407,26 @@ export interface CreateAgentBody {
   name?: string;
 }
 
+/**
+ * An image sent with a message (at most 4; PNG, JPEG, WebP, GIF or SVG; 8 MB each, 16 MB together). The device saves
+ * it in the agent's project folder under .anth/uploads/<date>/ and, when the agent's model can see images, shows it
+ * the image (or `preview`, a smaller copy made by the client, at most 4 MB).
+ */
+export interface MessageAttachment {
+  name: string;
+  mimeType: string;
+  /** The file, base64. */
+  data: string;
+  preview?: { mimeType: string; data: string };
+}
+
 export interface SendMessageBody {
+  /** The message; may be empty when it carries attachments. */
   content: string;
   whenBusy?: WhenBusy;
   requestId: string;
   waitMs?: number;
+  attachments?: MessageAttachment[];
 }
 
 export type SendResult =

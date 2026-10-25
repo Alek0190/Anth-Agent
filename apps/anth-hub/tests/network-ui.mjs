@@ -4,7 +4,7 @@
 //   npm run build && node tests/network-ui.mjs        (HEADED=1 to watch)
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -187,6 +187,42 @@ try {
   );
   await expect(chat().getByText("Tool finished: TOOL_OK")).toBeVisible();
   pass("streamed turns: text reply and a bash tool round");
+
+  // Images: attach with the paperclip, remove one, a PDF is refused, send with no text. The file lands in the
+  // project folder for the team, and the agent is told where.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const svg = Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>',
+  );
+  const attachInput = page.getByTestId("attach-input");
+  await attachInput.setInputFiles([
+    { name: "logo.png", mimeType: "image/png", buffer: png },
+    { name: "icon.svg", mimeType: "image/svg+xml", buffer: svg },
+  ]);
+  const chips = page.getByRole("list", { name: "Attached images" }).locator(".attachment:not(.attachment-adding)");
+  await expect(chips).toHaveCount(2);
+  await page.getByRole("button", { name: "Remove icon.svg" }).click();
+  await expect(chips).toHaveCount(1);
+  await attachInput.setInputFiles([
+    { name: "notes.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4") },
+  ]);
+  await expect(page.locator(".error-banner")).toContainText("only PNG, JPEG, WebP, GIF and SVG");
+  await page.getByRole("button", { name: "Dismiss error" }).click();
+  await expect(chips).toHaveCount(1);
+  await composer().fill("");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  // The reply (echo) shows the agent got the note; wait for it so the next steps start with an idle agent.
+  await expect(
+    chat().locator(".markdown").filter({ hasText: "Echo: The owner attached this file" }),
+  ).toBeVisible({ timeout: 15000 });
+  await expect(chat().getByText(/\.anth\/uploads\/.*logo\.png \(PNG image/).first()).toBeVisible();
+  await expect(page.getByRole("list", { name: "Attached images" })).toHaveCount(0);
+  const saved = join(work, "project-alpha", ".anth", "uploads", new Date().toISOString().slice(0, 10), "logo.png");
+  if (!existsSync(saved) || !readFileSync(saved).equals(png)) throw Error(`logo.png was not saved at ${saved}`);
+  pass("images: attach, remove, refuse a PDF, send without text; saved in the project folder");
 
   // Busy: queue + withdraw, reject-if-busy, steer, Escape interrupt.
   await send("!sleep 6");

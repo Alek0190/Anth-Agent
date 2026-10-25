@@ -50,7 +50,7 @@ import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT as ctx, withAbortSignal } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
-import { curatedModels, defaultModelId } from "./model-catalog.js";
+import { curatedModels, defaultModelId, newerModels } from "./model-catalog.js";
 import { fauxModels, installFaux } from "./faux.js";
 import {
   Harness,
@@ -64,9 +64,11 @@ import {
   type SubmissionId,
   type ModelRef,
   type ToolRegistration,
+  type UserInput,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { AgentExecutionEnv, agentShellEnv } from "./agent-env.js";
+import { attachmentMessage, parseAttachments, saveAttachments, withoutImageData } from "./attachments.js";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createPlayground, Workspace, type SpawnSession } from "./extensions.js";
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
@@ -221,7 +223,12 @@ export class Store {
     if (options.provider === "faux") installFaux(this.models);
     else {
       const provider = openrouterProvider();
-      const catalog = provider.getModels();
+      const catalog = [...provider.getModels()];
+      for (const extra of newerModels) {
+        const base = catalog.find((m) => m.id === extra.like);
+        if (base && !catalog.some((m) => m.id === extra.id))
+          catalog.push({ ...base, id: extra.id, name: extra.name, cost: { ...extra.cost }, maxTokens: extra.maxTokens });
+      }
       for (const model of curatedModels)
         if (!catalog.some((m) => m.id === model.id)) throw Error(`OpenRouter catalog missing ${model.id}`);
       this.models.setProvider({
@@ -1075,14 +1082,26 @@ export class Store {
     return (await this.agentDetail(row, c)).config;
   }
 
-  async send(c: Conversation, body: Record<string, unknown>) {
-    if (typeof body.content !== "string" || !body.content.trim() || body.content.length > 100000)
-      throw invalid("content must be a message under 100,000 characters");
+  async send(c: Conversation, body: Record<string, unknown>, row?: SessionRow) {
+    const attachments = parseAttachments(body.attachments);
+    const text = body.content ?? "";
+    if (typeof text !== "string" || text.length > 100000 || (!text.trim() && !attachments.length))
+      throw invalid("content must be a message under 100,000 characters (it may be empty when it carries attachments)");
     const whenBusy = (body.whenBusy ?? "followUp") as WhenBusy;
     if (!["steer", "followUp", "reject"].includes(whenBusy)) throw invalid("whenBusy must be followUp, steer or reject");
     if (typeof body.requestId !== "string" || !body.requestId || body.requestId.length > 128)
       throw invalid("requestId is required (≤128 chars) so retries never submit twice");
-    return c.submit({ type: "input", content: body.content, requestId: body.requestId, whenBusy }, ctx);
+    let content: UserInput = text;
+    if (attachments.length) {
+      // Saved where this agent works, so it and the team it delegates to find the files with their own tools.
+      const agent = await c.agent(ctx);
+      const dir = agent.cwd ?? row?.cwd;
+      if (!dir) throw invalid("This agent has no folder to save attachments in");
+      const saved = await saveAttachments(dir, attachments);
+      const model = agent.model ? this.models.getModel(agent.model.provider, agent.model.modelId) : undefined;
+      content = attachmentMessage(text, saved, !!(model as { input?: string[] } | undefined)?.input?.includes("image"));
+    }
+    return c.submit({ type: "input", content, requestId: body.requestId, whenBusy }, ctx);
   }
 
   async settled(h: Harness, submissionId: number, waitMs = 0, signal?: AbortSignal): Promise<SendResult> {
@@ -1156,15 +1175,16 @@ export class Store {
     return h.inspect(ctx);
   }
 
+  // Entries for clients carry no image data (see withoutImageData): attached files are in the project folder.
   async entries(c: Conversation, cursor: string | undefined, limit: number): Promise<Page<WireEntry>> {
     const page = await c.entries({}, Math.min(Math.max(limit, 1), 2000), decodeCursor(cursor), ctx);
-    return { items: page.items as unknown as WireEntry[], next: encodeCursor(page.next) };
+    return { items: withoutImageData(page.items) as unknown as WireEntry[], next: encodeCursor(page.next) };
   }
 
   async activeEntries(c: Conversation): Promise<WireEntry[]> {
     const view = await c.viewState(ctx);
     try {
-      return JSON.parse(JSON.stringify(view.value.entries)) as WireEntry[];
+      return withoutImageData(view.value.entries) as unknown as WireEntry[];
     } finally {
       view.dispose();
     }

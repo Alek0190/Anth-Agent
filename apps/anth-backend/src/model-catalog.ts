@@ -75,6 +75,12 @@ export const curatedModels = [
     icon: "grok.png",
   },
   {
+    id: "deepseek/deepseek-v4.1-flash-1017",
+    name: "DeepSeek V4.1 Flash 1017",
+    tier: "S",
+    icon: "deepseek.png",
+  },
+  {
     id: "z-ai/glm-5.3",
     name: "GLM-5.3",
     tier: "A",
@@ -178,3 +184,18 @@ export const curatedModels = [
   },
 ] as const;
 export const defaultModelId = "anthropic/claude-sonnet-5.5";
+
+/**
+ * Curated models newer than the OpenRouter snapshot bundled with pi-ai. Each copies the API settings of a model the
+ * snapshot lists (`like`) and sets what differs; values from pi-ai 1.4.0's OpenRouter snapshot (2026-10-21). Drop an
+ * entry once the bundled snapshot lists the model itself.
+ */
+export const newerModels = [
+  {
+    id: "deepseek/deepseek-v4.1-flash-1017",
+    like: "deepseek/deepseek-v4.1-flash",
+    name: "DeepSeek: DeepSeek V4.1 Flash 1017",
+    cost: { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0 },
+    maxTokens: 393216,
+  },
+] as const;

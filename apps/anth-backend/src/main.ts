@@ -7,6 +7,7 @@ import { Store } from "./store.js";
 import { bearerAuth } from "./auth.js";
 import { errorMiddleware } from "./errors.js";
 import { v1 } from "./routes.js";
+import { MESSAGE_BODY_LIMIT } from "./attachments.js";
 import { Alerts, alertsConfig } from "./telegram.js";
 import { Autopilot } from "./autopilot.js";
 
@@ -55,7 +56,16 @@ app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.post("/hooks/:client/:project/:secret", express.json({ limit: "256kb" }), (req, res) =>
   res.status(202).json(store.watcher.hook(String(req.params.client), String(req.params.project), String(req.params.secret), req.body)),
 );
-app.use("/v1", bearerAuth(config.token), express.json({ limit: "256kb" }), v1(store));
+// Messages may carry images (see attachments.ts); every other body stays small.
+const smallJson = express.json({ limit: "256kb" });
+const messageJson = express.json({ limit: MESSAGE_BODY_LIMIT });
+const MESSAGES = /^\/sessions\/[^/]+\/agents\/[^/]+\/messages\/?$/;
+app.use(
+  "/v1",
+  bearerAuth(config.token),
+  (req, res, next) => (req.method === "POST" && MESSAGES.test(req.path) ? messageJson : smallJson)(req, res, next),
+  v1(store),
+);
 app.use((_req, res) => res.status(404).json({ error: { code: "not_found", message: "Route not found" } }));
 app.use(errorMiddleware);
 
