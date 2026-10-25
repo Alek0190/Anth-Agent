@@ -407,10 +407,26 @@ export interface CreateAgentBody {
   name?: string;
 }
 
+/** Limits for MessageAttachment, shared by the device, the hub page and the hub server. */
+export const ATTACHMENT_LIMITS = {
+  files: 4,
+  /** One original file. */
+  fileBytes: 8 * 1024 * 1024,
+  /** All originals of one message together. */
+  totalBytes: 16 * 1024 * 1024,
+  /** One image a model is shown (a preview, or a small original); providers accept about 5 MB. */
+  viewBytes: 4 * 1024 * 1024,
+  /**
+   * The JSON body limit of the messages route: every original and every preview at its limit, base64 (×4/3), is
+   * (16 + 4 × 4) MB × 4/3 ≈ 42.7 MB, plus the text.
+   */
+  bodyLimit: "44mb",
+} as const;
+
 /**
- * An image sent with a message (at most 4; PNG, JPEG, WebP, GIF or SVG; 8 MB each, 16 MB together). The device saves
- * it in the agent's project folder under .anth/uploads/<date>/ and, when the agent's model can see images, shows it
- * the image (or `preview`, a smaller copy made by the client, at most 4 MB).
+ * An image sent with a message (see ATTACHMENT_LIMITS; PNG, JPEG, WebP, GIF or SVG). The device saves it in the
+ * agent's project folder under .anth/uploads/<date>/ and, when the agent's model can see images, shows it the image:
+ * `preview` (a smaller raster copy the client made; for an SVG, its picture) or the original when it is small enough.
  */
 export interface MessageAttachment {
   name: string;

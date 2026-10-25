@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AnthClient } from "../../anth-sdk/src/client.js";
 import {
@@ -33,7 +33,12 @@ test("attachments: names, types and limits are checked before anything is saved"
   const one = parseAttachments([{ name: "logo.png", mimeType: "image/png", data: PNG }]);
   assert.equal(one[0].name, "logo.png");
   assert.deepEqual(one[0].view, { mimeType: "image/png", data: PNG }, "a small original is shown as it is");
-  assert.equal(parseAttachments([{ name: "a.svg", mimeType: "image/svg+xml", data: SVG }])[0].view, undefined, "an SVG is saved, not shown");
+  assert.equal(parseAttachments([{ name: "a.svg", mimeType: "image/svg+xml", data: SVG }])[0].view, undefined, "an SVG file alone is not a picture");
+  // With the raster picture the hub draws of it, the model sees the SVG too.
+  assert.deepEqual(
+    parseAttachments([{ name: "a.svg", mimeType: "image/svg+xml", data: SVG, preview: { mimeType: "image/png", data: PNG } }])[0].view,
+    { mimeType: "image/png", data: PNG },
+  );
   assert.deepEqual(parseAttachments(undefined), []);
 
   const refused: [unknown, RegExp][] = [
@@ -64,7 +69,7 @@ test("attachments: the message names the files, and shows the images only to a m
   assert.match(intro.text, /- \.anth\/uploads\/2026-10-25\/logo\.png \(PNG image, 2 KB\)/);
   assert.match(intro.text, /- \.anth\/uploads\/2026-10-25\/icon\.svg \(SVG image, 1 KB\)/);
   assert.match(intro.text, /git-ignored: to use one in the product, copy it into the project/);
-  assert.match(intro.text, /open the others with your tools/);
+  assert.match(intro.text, /You can see logo\.png below; open the others with your tools/);
   assert.deepEqual(image, { type: "image", data: PNG, mimeType: "image/png" });
   assert.equal(seeing.length, 2, "the SVG is not sent as a picture");
 
@@ -97,7 +102,7 @@ test("attachments over the API: saved for the team, git-ignored, reused on retry
     assert.deepEqual(readdirSync(folder).sort(), ["anthwebbuilder-logo.png", "icon.svg"]);
     assert.ok(readFileSync(join(folder, "anthwebbuilder-logo.png")).equals(Buffer.from(BIG_PNG, "base64")));
     // Never committed by accident: the repo's local exclude keeps .anth/ out of git add -A.
-    assert.match(readFileSync(join(project, ".git", "info", "exclude"), "utf8"), /^\/\.anth\/$/m);
+    assert.match(readFileSync(join(project, ".git", "info", "exclude"), "utf8"), /^\.anth\/$/m);
     assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" }), "");
 
     // The agent got the paths, and (its model sees images) the PNG itself; clients get the entry without the data.
@@ -132,7 +137,7 @@ test("attachments over the API: saved for the team, git-ignored, reused on retry
     assert.match(JSON.stringify(await fake.json()), /is not a PNG image/);
     const empty = await post({ content: "  ", requestId: "bad-2" });
     assert.equal(empty.status, 400);
-    const huge = await post({ content: "x", requestId: "bad-3", attachments: [{ name: "a.png", mimeType: "image/png", data: "A".repeat(34 * 1024 * 1024) }] });
+    const huge = await post({ content: "x", requestId: "bad-3", attachments: [{ name: "a.png", mimeType: "image/png", data: "A".repeat(46 * 1024 * 1024) }] });
     assert.equal(huge.status, 400);
     assert.match(JSON.stringify(await huge.json()), /Message too large/);
     assert.ok(!existsSync(join(folder, "a.png")));
@@ -144,6 +149,38 @@ test("attachments over the API: saved for the team, git-ignored, reused on retry
     });
     assert.equal(other.status, 400);
     assert.match(JSON.stringify(await other.json()), /Body too large/);
+  } finally {
+    await server.stop();
+    await t.cleanup();
+  }
+});
+
+test("attachments: the largest permitted message fits the body limit; uploads in a subfolder of a repo stay out of git", async () => {
+  const t = await tempStore();
+  const token = newToken();
+  const repo = join(t.work, "project");
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  // An earlier version wrote a root-only pattern; it must not stop the fix for subfolders.
+  writeFileSync(join(repo, ".git", "info", "exclude"), "# git ls-files --others --exclude-from=.git/info/exclude\n/.anth/\n");
+  const sub = join(repo, "nested");
+  const server = await bootServer({ home: join(t.root, "home"), startDirs: t.work, token, name: "limits-box" });
+  try {
+    const client = new AnthClient(server.base, token);
+    const s = await client.createSession({ name: "Nested", cwd: sub, model: faux });
+    // Four 4 MB originals (16 MB together) and four 4 MB previews: every limit at once, about 42.7 MB of JSON.
+    const four = Buffer.concat([Buffer.from(PNG, "base64").subarray(0, 8), Buffer.alloc(4 * 1024 * 1024 - 8, 1)]).toString("base64");
+    const preview = Buffer.concat([Buffer.from(JPEG_HEAD, "base64"), Buffer.alloc(4 * 1024 * 1024 - 6, 2)]).toString("base64");
+    const attachments = [1, 2, 3, 4].map((n) => ({ name: `shot-${n}.png`, mimeType: "image/png", data: four, preview: { mimeType: "image/jpeg", data: preview } }));
+    const res = await fetch(`${server.base}/v1/sessions/${s.id}/agents/main/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ content: "Four screenshots", requestId: "max-1", attachments }),
+    });
+    assert.equal(res.status, 202, JSON.stringify(await res.clone().json()));
+    const day = new Date().toISOString().slice(0, 10);
+    assert.equal(readdirSync(join(sub, ".anth", "uploads", day)).length, 4);
+    assert.match(readFileSync(join(repo, ".git", "info", "exclude"), "utf8"), /^\.anth\/$/m);
+    assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repo, encoding: "utf8" }), "");
   } finally {
     await server.stop();
     await t.cleanup();

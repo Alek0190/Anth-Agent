@@ -5,26 +5,25 @@
 // ship never commits an upload by accident; a developer copies the file into the product on purpose.
 //
 // When the agent's model can see images, the message also carries each image (a downscaled preview from the hub when
-// the original is large), so the agent knows what it looks like before it hands the work out.
+// the original is large, and a raster picture of an SVG), so the agent knows what it looks like before it hands the
+// work out.
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { MessageAttachment } from "../../anth-sdk/src/api.js";
+import { ATTACHMENT_LIMITS, type MessageAttachment } from "../../anth-sdk/src/api.js";
 import { invalid } from "./errors.js";
 
 const run = promisify(execFile);
 
-export const MAX_ATTACHMENTS = 4;
-/** One original file. */
-export const MAX_FILE_BYTES = 8 * 1024 * 1024;
-/** All originals of one message together. */
-export const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
-/** One image the model sees: providers accept about 5 MB; the hub sends a downscaled preview well under it. */
-export const MAX_VIEW_BYTES = 4 * 1024 * 1024;
-/** The JSON body limit for the messages route: the files above, base64-encoded, plus their previews. */
-export const MESSAGE_BODY_LIMIT = "32mb";
+export const {
+  files: MAX_ATTACHMENTS,
+  fileBytes: MAX_FILE_BYTES,
+  totalBytes: MAX_TOTAL_BYTES,
+  viewBytes: MAX_VIEW_BYTES,
+  bodyLimit: MESSAGE_BODY_LIMIT,
+} = ATTACHMENT_LIMITS;
 
 /** Accepted types and the extension a saved file gets. */
 const EXTENSIONS: Record<string, string> = {
@@ -34,7 +33,10 @@ const EXTENSIONS: Record<string, string> = {
   "image/gif": "gif",
   "image/svg+xml": "svg",
 };
-/** Types a model can be shown (SVG is saved for the team but is text, not a picture, to a model). */
+/**
+ * Raster types a model can be shown. An SVG file is text to a model: it is shown only through a raster `preview` from
+ * the client (the hub draws one), and its file stays readable to every agent.
+ */
 const VIEWABLE = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const LABEL: Record<string, string> = {
   "image/png": "PNG image",
@@ -131,15 +133,19 @@ export function parseAttachments(value: unknown): ParsedAttachment[] {
   });
 }
 
-/** Keep .anth/ out of the folder's repo through its local exclude file (never committed, never shared). */
+/**
+ * Keep .anth/ out of the folder's repo through its local exclude file (never committed, never shared). The pattern has
+ * no leading slash, so it also covers an agent working in a subfolder of the repo (<sub>/.anth/); a root-only
+ * "/.anth/" line from an earlier version does not count.
+ */
 async function excludeFromGit(dir: string) {
   try {
     const { stdout } = await run("git", ["rev-parse", "--git-path", "info/exclude"], { cwd: dir, timeout: 10_000 });
     const file = resolve(dir, stdout.trim());
     const current = await readFile(file, "utf8").catch(() => "");
-    if (current.split("\n").some((line) => line.trim() === "/.anth/" || line.trim() === ".anth/")) return;
+    if (current.split("\n").some((line) => [".anth/", "**/.anth/", ".anth"].includes(line.trim()))) return;
     await mkdir(resolve(file, ".."), { recursive: true });
-    await appendFile(file, `${current && !current.endsWith("\n") ? "\n" : ""}# Anth-Agent uploads and scratch files\n/.anth/\n`);
+    await appendFile(file, `${current && !current.endsWith("\n") ? "\n" : ""}# Anth-Agent uploads and scratch files\n.anth/\n`);
   } catch {
     // Not a git repo (or no git): nothing to keep out.
   }
@@ -190,7 +196,12 @@ export function attachmentMessage(text: string, saved: SavedAttachment[], canSee
     ...saved.map((s) => `- ${s.path} (${LABEL[s.mimeType]}, ${mb(s.size)})`),
     "Uploads are git-ignored: to use one in the product, copy it into the project (for example into public/) and commit that copy. Pass the paths on when you delegate.",
   ];
-  if (shown.length) lines.push(shown.length === saved.length ? "You can see the images below." : "You can see the PNG, JPEG, WebP and GIF ones below; open the others with your tools.");
+  if (shown.length)
+    lines.push(
+      shown.length === saved.length
+        ? "You can see the images below."
+        : `You can see ${shown.map((s) => basename(s.path)).join(", ")} below; open the others with your tools (an SVG is text you can read).`,
+    );
   else if (!canSeeImages) lines.push("Your model cannot see images: work from the files and the owner's words, or ask a teammate whose model can.");
   else lines.push("Open them with your tools (an SVG is text you can read).");
   const intro = lines.join("\n").trim();

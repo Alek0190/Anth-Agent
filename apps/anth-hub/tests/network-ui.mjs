@@ -212,6 +212,16 @@ try {
   await expect(page.locator(".error-banner")).toContainText("only PNG, JPEG, WebP, GIF and SVG");
   await page.getByRole("button", { name: "Dismiss error" }).click();
   await expect(chips).toHaveCount(1);
+  // Some clipboards and drops give no type: the image is recognised from its bytes.
+  await page.locator(".composer").evaluate((el, b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], "clip", { type: "" }));
+    el.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, png.toString("base64"));
+  await expect(chips).toHaveCount(2);
+  await page.getByRole("button", { name: "Remove clip" }).click();
+  await expect(chips).toHaveCount(1);
   await composer().fill("");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   // The reply (echo) shows the agent got the note; wait for it so the next steps start with an idle agent.

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { hostname, networkInterfaces } from "node:os";
 import { NetworkRegistry } from "../../../../anth-sdk/src/node/registry.js";
+import { ATTACHMENT_LIMITS } from "../../../../anth-sdk/src/api.js";
 import { DeviceMonitor } from "./monitor.js";
 import { StreamMux } from "./mux.js";
 import { proxy } from "./proxy.js";
@@ -61,10 +62,10 @@ const safe =
 
 const app = express();
 app.disable("x-powered-by");
-// A message to an agent may carry images (the device checks them: 4 at most, 8 MB each, 16 MB together); every other
-// body stays small.
+// A message to an agent may carry images (the device checks them against ATTACHMENT_LIMITS); every other body stays
+// small.
 const smallJson = express.json({ limit: "256kb" });
-const messageJson = express.json({ limit: "32mb" });
+const messageJson = express.json({ limit: ATTACHMENT_LIMITS.bodyLimit });
 const MESSAGES = /^\/devices\/[^/]+\/v1\/sessions\/[^/]+\/agents\/[^/]+\/messages\/?$/;
 app.use("/api", guard(allowedHosts), (req, res, next) =>
   (req.method === "POST" && MESSAGES.test(req.path) ? messageJson : smallJson)(req, res, next),

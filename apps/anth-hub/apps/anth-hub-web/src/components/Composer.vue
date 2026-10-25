@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { ArrowUp, ChevronDown, Clock3, Octagon, Paperclip, X } from "lucide-vue-next";
 import type { WhenBusy } from "@sdk/api";
 import { newId } from "../client/ids";
@@ -49,26 +49,43 @@ const mode = ref<WhenBusy>("followUp");
 const pending = ref(false);
 
 // Images for the next message: picked with the paperclip, pasted, or dropped on the composer.
+// Additions run one after another (a paste during a drop waits its turn), so each one checks the limits against the
+// list as it really is, and Send stays off until the last one is done.
 const attachments = ref<DraftAttachment[]>([]);
-const adding = ref(false);
+const waitingAdds = ref(0);
+const adding = computed(() => waitingAdds.value > 0);
 const dragging = ref(false);
 const fileInput = ref<HTMLInputElement>();
-async function addFiles(files: File[]) {
-  if (!files.length) return;
-  adding.value = true;
+let unmounted = false;
+let additions: Promise<void> = Promise.resolve();
+function addFiles(files: File[]) {
+  if (!files.length) return additions;
+  waitingAdds.value++;
   ui.error = "";
-  try {
-    for (const file of files) {
-      try {
-        attachments.value = [...attachments.value, await prepare(file, attachments.value)];
-      } catch (e) {
-        ui.error = e instanceof Error ? e.message : String(e);
+  additions = additions.then(async () => {
+    try {
+      for (const file of files) {
+        if (unmounted) return;
+        try {
+          const draft = await prepare(file, attachments.value);
+          // The composer went away while this file was being read: let its image go.
+          if (unmounted) discard(draft);
+          else attachments.value = [...attachments.value, draft];
+        } catch (e) {
+          ui.error = e instanceof Error ? e.message : String(e);
+        }
       }
+    } finally {
+      waitingAdds.value--;
     }
-  } finally {
-    adding.value = false;
-  }
+  });
+  return additions;
 }
+onBeforeUnmount(() => {
+  unmounted = true;
+  for (const a of attachments.value) discard(a);
+  attachments.value = [];
+});
 function removeAttachment(id: string) {
   const a = attachments.value.find((x) => x.id === id);
   if (a) discard(a);

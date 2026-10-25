@@ -56,11 +56,11 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 
 ### Attachments
 
-A message can carry images, for example a logo or an icon for the team: `attachments: [{name, mimeType, data, preview?}]`, at most 4, PNG, JPEG, WebP, GIF or SVG, 8 MB each and 16 MB together, `data` base64. This route alone accepts bodies up to 32 MB; every other route keeps 256 KB.
+A message can carry images, for example a logo or an icon for the team: `attachments: [{name, mimeType, data, preview?}]`, at most 4, PNG, JPEG, WebP, GIF or SVG, 8 MB each and 16 MB together, `data` base64; a `preview` is at most 4 MB (limits: `ATTACHMENT_LIMITS` in the SDK). This route alone accepts bodies up to 44 MB, enough for every file and preview at its limit; every other route keeps 256 KB.
 
 - Each file is checked against its type (a renamed file is refused) and saved where the agent works, under `.anth/uploads/<YYYY-MM-DD>/<name>`, so its team can use it with their own tools. The same name with the same bytes reuses the file (a retried send never makes copies); a different file gets `-2`, `-3`, ….
-- `.anth/` is added to the repo's local exclude (`.git/info/exclude`), so a ship never commits an upload: a developer copies the file into the product on purpose.
-- The agent's message lists the saved paths. When its model can see images, the message also carries each PNG, JPEG, WebP or GIF: `preview` (a smaller copy the client made, at most 4 MB) or the original when it is at most 4 MB. SVGs are saved, not shown: they are text the agent can read.
+- `.anth/` (at any depth, so an agent working in a subfolder of the repo is covered too) is added to the repo's local exclude (`.git/info/exclude`), so a ship never commits an upload: a developer copies the file into the product on purpose.
+- The agent's message lists the saved paths. When its model can see images, the message also carries each image: `preview` (a raster copy the client made: smaller, and for an SVG its picture) or a PNG, JPEG, WebP or GIF original of at most 4 MB. An SVG without a preview is saved but not shown; it is text the agent can read.
 - Entries and streams sent to clients carry no image data: an image block becomes `{type:"image", mimeType, data:"", omitted:true}`.
 ## Watch and fix
 
