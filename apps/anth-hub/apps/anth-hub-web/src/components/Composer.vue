@@ -1,9 +1,20 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
-import { ArrowUp, ChevronDown, Clock3, Octagon, X } from "lucide-vue-next";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { ArrowUp, ChevronDown, Clock3, Octagon, Paperclip, X } from "lucide-vue-next";
 import type { WhenBusy } from "@sdk/api";
 import { newId } from "../client/ids";
 import { commands, parseCommand, type SlashCommand } from "../client/commands";
+import {
+  ACCEPT,
+  MAX_FILES,
+  discard,
+  imageFiles,
+  prepare,
+  signature,
+  sizeLabel,
+  toWire,
+  type DraftAttachment,
+} from "../client/attachments";
 import {
   agentHandle,
   agentState,
@@ -36,6 +47,65 @@ async function routeToOwner() {
 
 const mode = ref<WhenBusy>("followUp");
 const pending = ref(false);
+
+// Images for the next message: picked with the paperclip, pasted, or dropped on the composer.
+// Additions run one after another (a paste during a drop waits its turn), so each one checks the limits against the
+// list as it really is, and Send stays off until the last one is done.
+const attachments = ref<DraftAttachment[]>([]);
+const waitingAdds = ref(0);
+const adding = computed(() => waitingAdds.value > 0);
+const dragging = ref(false);
+const fileInput = ref<HTMLInputElement>();
+let unmounted = false;
+let additions: Promise<void> = Promise.resolve();
+function addFiles(files: File[]) {
+  if (!files.length) return additions;
+  waitingAdds.value++;
+  ui.error = "";
+  additions = additions.then(async () => {
+    try {
+      for (const file of files) {
+        if (unmounted) return;
+        try {
+          const draft = await prepare(file, attachments.value);
+          // The composer went away while this file was being read: let its image go.
+          if (unmounted) discard(draft);
+          else attachments.value = [...attachments.value, draft];
+        } catch (e) {
+          ui.error = e instanceof Error ? e.message : String(e);
+        }
+      }
+    } finally {
+      waitingAdds.value--;
+    }
+  });
+  return additions;
+}
+onBeforeUnmount(() => {
+  unmounted = true;
+  for (const a of attachments.value) discard(a);
+  attachments.value = [];
+});
+function removeAttachment(id: string) {
+  const a = attachments.value.find((x) => x.id === id);
+  if (a) discard(a);
+  attachments.value = attachments.value.filter((x) => x.id !== id);
+}
+function picked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  void addFiles([...(input.files ?? [])]);
+  input.value = "";
+}
+function paste(e: ClipboardEvent) {
+  const files = imageFiles(e.clipboardData);
+  if (!files.length) return;
+  e.preventDefault();
+  void addFiles(files);
+}
+function drop(e: DragEvent) {
+  dragging.value = false;
+  void addFiles(imageFiles(e.dataTransfer));
+}
 
 // Typing "/" lists the slash commands; arrows pick, Tab or Enter completes.
 const menuIndex = ref(0);
@@ -98,29 +168,38 @@ async function runCommand(text: string) {
 async function send() {
   const content = ui.composer.trim();
   const handle = agentHandle.value;
-  if (!content || pending.value || !handle) return;
-  if (content.startsWith("/") && (await runCommand(content))) return;
+  const files = attachments.value;
+  if ((!content && !files.length) || pending.value || adding.value || !handle) return;
+  if (!files.length && content.startsWith("/") && (await runCommand(content))) return;
   pending.value = true;
   await routeToOwner();
   const target = agentHandle.value ?? handle;
   const t = selected.value!;
   const key = `${t.deviceId}/${t.sessionId}/${t.agentId}`;
-  let saved: { key: string; content: string; mode: string; requestId: string } | undefined;
+  const fileKey = signature(files);
+  let saved:
+    | { key: string; content: string; mode: string; requestId: string; files?: string }
+    | undefined;
   try {
     saved = JSON.parse(sessionStorage.getItem("anth.pending-send") ?? "null");
   } catch {}
   const requestId =
-    saved?.key === key && saved.content === content && saved.mode === mode.value
+    saved?.key === key &&
+    saved.content === content &&
+    saved.mode === mode.value &&
+    (saved.files ?? "") === fileKey
       ? saved.requestId
       : newId();
   sessionStorage.setItem(
     "anth.pending-send",
-    JSON.stringify({ key, content, mode: mode.value, requestId }),
+    JSON.stringify({ key, content, mode: mode.value, requestId, files: fileKey }),
   );
   await attempt(async () => {
-    await target.send(content, mode.value, requestId);
+    await target.send(content, mode.value, requestId, undefined, toWire(files));
     sessionStorage.removeItem("anth.pending-send");
     ui.composer = "";
+    for (const a of files) discard(a);
+    attachments.value = attachments.value.filter((a) => !files.includes(a));
   });
   pending.value = false;
 }
@@ -147,7 +226,29 @@ function withdraw(id: number) {
         </button>
       </div>
     </div>
-    <div class="composer">
+    <div
+      class="composer"
+      :class="{ dragging }"
+      @dragover.prevent="dragging = true"
+      @dragleave="dragging = false"
+      @drop.prevent="drop"
+    >
+      <ul v-if="attachments.length || adding" class="attachments" aria-label="Attached images">
+        <li v-for="a in attachments" :key="a.id" class="attachment">
+          <img :src="a.url" :alt="a.name" /><span class="attachment-text"
+            ><span class="attachment-name" :title="a.name">{{ a.name }}</span
+            ><span class="attachment-size">{{ sizeLabel(a.size) }}</span></span
+          ><button
+            class="icon-button"
+            :aria-label="`Remove ${a.name}`"
+            title="Remove"
+            @click="removeAttachment(a.id)"
+          >
+            <X :size="16" />
+          </button>
+        </li>
+        <li v-if="adding" class="attachment attachment-adding">Reading image…</li>
+      </ul>
       <ul v-if="matches.length" class="slash-menu" role="listbox" aria-label="Slash commands">
         <li
           v-for="(c, i) in matches"
@@ -168,9 +269,29 @@ function withdraw(id: number) {
         placeholder="Give your agent something to do, or type / for commands…"
         aria-label="Message your agent"
         @keydown="keydown"
+        @paste="paste"
       />
       <div class="composer-toolbar">
         <div class="composer-left">
+          <button
+            class="attach"
+            type="button"
+            aria-label="Attach images"
+            title="Attach images: logos, icons, screenshots (PNG, JPEG, WebP, GIF, SVG). You can also paste or drop them here. They are saved in the project folder for the whole team."
+            :disabled="attachments.length >= MAX_FILES || adding"
+            @click="fileInput?.click()"
+          >
+            <Paperclip :size="20" />
+          </button>
+          <input
+            ref="fileInput"
+            type="file"
+            :accept="ACCEPT.join(',')"
+            multiple
+            hidden
+            data-testid="attach-input"
+            @change="picked"
+          />
           <div class="queue-mode">
             <select
               v-model="mode"
@@ -194,7 +315,13 @@ function withdraw(id: number) {
           ><button
             class="send"
             aria-label="Send message"
-            :disabled="!ui.composer.trim() || pending || !agentState.ready || !online"
+            :disabled="
+              (!ui.composer.trim() && !attachments.length) ||
+              pending ||
+              adding ||
+              !agentState.ready ||
+              !online
+            "
             @click="send"
           >
             <ArrowUp :size="20" />

@@ -41,7 +41,7 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 | `GET .../agents/:a/events` | `?docs=demo.job-runs` | agent stream |
 | `GET .../agents/:a/entries` | `?scope=all\|active&cursor=&limit=` | `{items, next}` stored history; `limit` defaults to 500 (max 2000). `scope=active` returns `{items}`, the active context, unpaged |
 | `GET .../agents/:a/transcript` | `?format=json\|markdown` | normalized transcript |
-| `POST .../agents/:a/messages` | `{content, whenBusy?: followUp\|steer\|reject, requestId, waitMs?}` (`whenBusy` defaults to `followUp`; `waitMs` ≤300000) | `202 {submissionId, status:"queued"\|"pending"}`, `200 {status:"done", answer:{entryId,text}}` or `200 {status:"unanswered", reason}` |
+| `POST .../agents/:a/messages` | `{content, whenBusy?: followUp\|steer\|reject, requestId, waitMs?, attachments?}` (`whenBusy` defaults to `followUp`; `waitMs` ≤300000; `content` may be empty when there are attachments; see [Attachments](#attachments)) | `202 {submissionId, status:"queued"\|"pending"}`, `200 {status:"done", answer:{entryId,text}}` or `200 {status:"unanswered", reason}` |
 | `DELETE .../agents/:a/inbox/:submissionId` | | withdraw a queued input |
 | `POST .../agents/:a/abort` | `{background?}` | stops foreground work (and background with `true`) |
 | `POST .../agents/:a/fork` | `{entryId, name?}` | `201 AgentSummary` |
@@ -54,6 +54,14 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 | `POST .../agents/:a/demo/jobs` | `{job, input?}` | `201 {taskId}`: a durable job run the conversation owns in the background, anchored by a `demo.job` entry |
 | `POST .../agents/:a/demo/jobs/:taskId/approval` | `{approved}` | `{ok}`; `409 conflict` when the run is not waiting |
 
+### Attachments
+
+A message can carry images, for example a logo or an icon for the team: `attachments: [{name, mimeType, data, preview?}]`, at most 4, PNG, JPEG, WebP, GIF or SVG, 8 MB each and 16 MB together, `data` base64; a `preview` is at most 4 MB (limits: `ATTACHMENT_LIMITS` in the SDK). This route alone accepts bodies up to 44 MB, enough for every file and preview at its limit; every other route keeps 256 KB.
+
+- Each file is checked against its type (a renamed file is refused) and saved where the agent works, under `.anth/uploads/<YYYY-MM-DD>/<name>`, so its team can use it with their own tools. The same name with the same bytes reuses the file (a retried send never makes copies); a different file gets `-2`, `-3`, ….
+- `.anth/` (at any depth, so an agent working in a subfolder of the repo is covered too) is added to the repo's local exclude (`.git/info/exclude`), so a ship never commits an upload: a developer copies the file into the product on purpose.
+- The agent's message lists the saved paths. When its model can see images, the message also carries each image: `preview` (a raster copy the client made: smaller, and for an SVG its picture) or a PNG, JPEG, WebP or GIF original of at most 4 MB. An SVG without a preview is saved but not shown; it is text the agent can read.
+- Entries and streams sent to clients carry no image data: an image block becomes `{type:"image", mimeType, data:"", omitted:true}`.
 ## Watch and fix
 
 One device watches a project's production. Every minute (`ANTH_WATCH_INTERVAL_MS`, `0` turns the timer off) it collects events, Jev judges each one (`normal`, `suspicious` or `incident` plus an impact score; rules take over when Jev is unreachable), and code applies the rule: three `incident` verdicts with one fingerprint within ten minutes, or two failed uptime checks, open one incident. An incident gets an incident agent in the watch session: a team Lead named `Incident #<n>`, working in a git worktree `<repo parent>/.anth-incidents/<repo>-inc-<n>` on branch `incident/inc-<n>` from the default branch. Its `submit_fix {test_command, summary}` tool proves the fix (the changed tests fail on the base branch and pass on the incident branch) and only then starts the `ship` job, which waits for your approval before production. A completed ship resolves the incident; a declined or failed one marks it `needs-you`.

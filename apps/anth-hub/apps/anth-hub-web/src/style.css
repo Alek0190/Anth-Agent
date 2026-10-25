@@ -1000,6 +1000,75 @@ svg {
   border-radius: 11px;
   box-shadow: 0 6px 30px #0002;
 }
+.composer.dragging {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px #ff899740;
+}
+.attachments {
+  list-style: none;
+  margin: 0;
+  padding: 12px 14px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 5px 4px 5px 5px;
+  border: 1px solid #513d3f;
+  border-radius: 8px;
+  background: #342329;
+}
+.attachment img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border-radius: 5px;
+  background: #f2eeee;
+  flex-shrink: 0;
+}
+.attachment-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 14px;
+}
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-size {
+  color: var(--muted);
+  font-size: 13px;
+}
+.attachment .icon-button {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.attachment-adding {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.attach {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #77515a;
+  border-radius: 8px;
+  background: #342329;
+  color: #f8eeee;
+}
+.attach:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 .composer textarea {
   width: 100%;
   display: block;

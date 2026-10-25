@@ -192,7 +192,7 @@ Fork any agent at any entry, from the transcript or with `/fork`. The fork copie
   <img src="images/15_web_client.png" alt="The web client: the network tree with five devices, the inspector's Session tab with the context bar, and an agent's transcript on a cloud VM" width="800">
 </p>
 
-The web client has three columns: the **network tree** (device → session → agent), the **inspector** and the **agent**. The inspector tabs are Session (model, thinking, context bar, usage), State, Tasks, Tools and Extend. The composer sends a follow-up, a steer (it joins after the current tool round) or a reject-if-busy, and `/` opens the slash commands. The browser never sees a token. It holds one SSE connection to the hub, and the hub opens the authenticated upstreams.
+The web client has three columns: the **network tree** (device → session → agent), the **inspector** and the **agent**. The inspector tabs are Session (model, thinking, context bar, usage), State, Tasks, Tools and Extend. The composer sends a follow-up, a steer (it joins after the current tool round) or a reject-if-busy, and `/` opens the slash commands. The paperclip (or a paste, or a drop) attaches up to 4 images, such as a logo or an icon: they are saved in the project folder under `.anth/uploads/` for the whole team, git-ignored, and shown to the agent when its model can see images. The browser never sees a token. It holds one SSE connection to the hub, and the hub opens the authenticated upstreams.
 
 <p align="center">
   <img src="images/16_terminal_client.svg" alt="anth-tui attached to vm-1:release-notes: the device, workspace and agent header, write and bash tool rows with results, and the model, context and cost footer" width="780">
