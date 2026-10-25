@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -29,6 +29,9 @@ echo "docker $*" >> ${log}
 case "$1" in
   build) tag="$4"; [ -f "$5/Dockerfile" ] || exit 1; touch "${root}/images/$tag" ;;
   image) [ -f "${root}/images/$3" ] ;;
+  inspect) [ -f "${root}/preview-image" ] && cat "${root}/preview-image" ;;
+  run) if [ "$2" = -d ] && [ "$4" = anth-site-preview ]; then echo "\${@: -1}" > "${root}/preview-image"; fi ;;
+  rm) if [[ "$*" == *anth-site-preview* ]]; then rm -f "${root}/preview-image"; fi ;;
 esac
 `,
   );
@@ -37,7 +40,7 @@ esac
   chmodSync(join(bin, "docker"), 0o755);
   chmodSync(join(bin, "curl"), 0o755);
   /** Run anth-deploy with these args (or a forced-command string), feeding `input` on stdin. */
-  const run = (args: string[], opts: { input?: Buffer; forced?: string; failPort?: number; reload?: string } = {}) => {
+  const run = (args: string[], opts: { input?: Buffer; forced?: string; failPort?: number; reload?: string; env?: Record<string, string> } = {}) => {
     const r = spawnSync("bash", [SCRIPT, ...args], {
       input: opts.input ?? Buffer.alloc(0),
       env: {
@@ -48,6 +51,7 @@ esac
         ANTH_HEALTH_TRIES: "2",
         ...(opts.forced !== undefined ? { SSH_ORIGINAL_COMMAND: opts.forced } : {}),
         ...(opts.failPort ? { FAIL_PORT: String(opts.failPort) } : {}),
+        ...opts.env,
       },
     });
     return { code: r.status, out: r.stdout.toString().trim(), err: r.stderr.toString() };
@@ -197,6 +201,115 @@ test("anth-deploy: /anth-health stays open; just server lock puts production and
     assert.doesNotMatch(s.file("Caddyfile"), /basicauth/);
     assert.doesNotMatch(s.file("app.env"), /BASIC_AUTH/);
     assert.match(s.run(["refresh", "nope"]).err, /not set up/);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("anth-deploy: a protected preview starts on a fresh copy of production's data; an open one never does", async () => {
+  const s = server();
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    // Production data: a JSON file, a folder, a SQLite database in WAL mode with writes not yet checkpointed, and a
+    // file that only looks like a database (its snapshot fails, so its plain copy must stay whole).
+    const data = join(s.app, "data");
+    mkdirSync(join(data, "backups"), { recursive: true });
+    writeFileSync(join(data, "sites.json"), '[{"slug":"bistro"}]');
+    writeFileSync(join(data, "backups", "old.json"), "{}");
+    writeFileSync(join(data, "broken.db"), "SQLite format 3\0not really a database");
+    const db = new DatabaseSync(join(data, "app.db"));
+    db.exec("PRAGMA journal_mode=WAL; CREATE TABLE users(email TEXT); INSERT INTO users VALUES('a@example.com'),('b@example.com');");
+    // The preview's leftovers from last time must go.
+    const previewData = join(s.app, "preview-data");
+    mkdirSync(previewData, { recursive: true });
+    writeFileSync(join(previewData, "stale.json"), "old preview");
+    const local = { ANTH_DATA_COPY: "local" };
+    const env = () => readFileSync(join(s.app, "app.env"), "utf8");
+
+    // No password: real users' data stays out of the preview.
+    const open = s.run(["preview", "site", "abc1234"], { input: s.tarball(), env: local });
+    assert.equal(open.code, 0, open.err);
+    assert.match(open.err, /has no password, so it does not get a copy of production's data/);
+    assert.ok(existsSync(join(previewData, "stale.json")));
+    assert.ok(!existsSync(join(previewData, "sites.json")));
+    assert.match(s.calls(), /docker run -d --name anth-site-preview .*-e ANTH_PREVIEW=1/);
+
+    // Preview locked (production public): the copy is made, SQLite as a consistent snapshot, stale files gone.
+    writeFileSync(join(s.app, "app.env"), env() + "BASIC_AUTH_USER=alex\nBASIC_AUTH_HASH='$2a$14$x'\nBASIC_AUTH_SCOPE=preview\n");
+    const locked = s.run(["preview", "site", "def5678"], { input: s.tarball(), env: local });
+    assert.equal(locked.code, 0, locked.err);
+    assert.match(locked.err, /copying production's data into the preview/);
+    assert.match(locked.err, /consistent snapshot of app\.db/);
+    assert.equal(readFileSync(join(previewData, "sites.json"), "utf8"), '[{"slug":"bistro"}]');
+    assert.ok(existsSync(join(previewData, "backups", "old.json")));
+    assert.ok(!existsSync(join(previewData, "stale.json")));
+    assert.ok(!existsSync(join(previewData, "app.db-wal")), "the snapshot replaces the copy's WAL");
+    const copy = new DatabaseSync(join(previewData, "app.db"), { readOnly: true });
+    assert.equal((copy.prepare("SELECT count(*) AS n FROM users").get() as { n: number }).n, 2);
+    copy.close();
+    // A snapshot that fails keeps the plain copy, whole.
+    assert.match(locked.err, /no consistent snapshot of broken\.db .*keeps the plain copy/);
+    assert.equal(readFileSync(join(previewData, "broken.db"), "latin1"), "SQLite format 3\0not really a database");
+    assert.ok(!existsSync(join(previewData, "broken.db.anth-snapshot")));
+    db.close();
+    // Production's own data is untouched; no staging folders are left behind.
+    assert.equal(readFileSync(join(data, "sites.json"), "utf8"), '[{"slug":"bistro"}]');
+    assert.ok(!existsSync(join(s.app, "preview-data.next")));
+    assert.deepEqual(readdirSync(s.app).filter((f) => f.startsWith(".discard-")), []);
+
+    // A copy that fails leaves the preview with the data it had.
+    writeFileSync(join(previewData, "mine.json"), "preview only");
+    const failing = join(s.root, "failing-bin");
+    mkdirSync(failing);
+    writeFileSync(join(failing, "cp"), "#!/bin/sh\necho 'cp: disk full' >&2\nexit 1\n");
+    chmodSync(join(failing, "cp"), 0o755);
+    const failed = s.run(["preview", "site", "abc9876"], { input: s.tarball(), env: { ...local, PATH: `${join(s.root, "bin")}:${failing}:${process.env.PATH}` } });
+    assert.equal(failed.code, 0, failed.err);
+    assert.match(failed.err, /copying production's data failed; the preview keeps the data it had/);
+    assert.ok(existsSync(join(previewData, "mine.json")));
+    assert.ok(existsSync(join(previewData, "sites.json")));
+    assert.ok(!existsSync(join(s.app, "preview-data.next")));
+
+    // On the server the copy runs in a container as root, with production's data read-only and no network.
+    const docker = s.run(["preview", "site", "abc5555"], { input: s.tarball() });
+    assert.equal(docker.code, 0, docker.err);
+    assert.match(s.calls(), /docker run --rm --user 0:0 --network none --entrypoint sh [\s\S]*? -v \S+\/data:\/from:ro -v \S+\/preview-data\.next:\/to anth-site:abc5555 /);
+
+    // Scope preview: production is public, the preview asks for the password.
+    assert.equal(s.run(["promote", "site", "def5678"]).code, 0);
+    const [prod, preview] = s.file("Caddyfile").split("preview.site.test {");
+    assert.doesNotMatch(prod, /basicauth/);
+    assert.match(preview, /basicauth \{\n\t\t\talex/);
+
+    // PREVIEW_DATA=empty: the preview keeps its own data even when locked.
+    writeFileSync(join(previewData, "mine.json"), "preview only");
+    writeFileSync(join(s.app, "app.env"), env() + "PREVIEW_DATA=empty\n");
+    const kept = s.run(["preview", "site", "abc9876"], { input: s.tarball(), env: local });
+    assert.equal(kept.code, 0, kept.err);
+    assert.match(kept.err, /keeps its own data \(PREVIEW_DATA=empty\)/);
+    assert.ok(existsSync(join(previewData, "mine.json")));
+
+    // Unlock: the copy leaves the preview before the password does, and the preview starts again on empty data.
+    writeFileSync(join(s.app, "app.env"), env().replace(/^BASIC_AUTH_.*\n/gm, ""));
+    const before = s.calls().length;
+    const unlocked = s.run(["refresh", "site"], { env: local });
+    assert.equal(unlocked.code, 0, unlocked.err);
+    assert.match(unlocked.err, /removing its copy of production's data/);
+    assert.deepEqual(readdirSync(previewData), []);
+    assert.ok(!existsSync(join(s.app, "preview-data.production")));
+    assert.doesNotMatch(s.file("Caddyfile"), /basicauth/);
+    const after = s.calls().slice(before);
+    assert.match(after, /docker rm -f anth-site-preview[\s\S]*docker run -d --name anth-site-preview .*-e ANTH_PREVIEW=1 .*anth-site:abc9876/);
+    // The copy is gone before Caddy drops the password.
+    assert.ok(unlocked.err.indexOf("removing its copy") < unlocked.err.indexOf("caddy-reload"));
+    assert.ok(unlocked.err.includes("caddy-reload"));
+
+    // And a copy left on an open preview by older versions is never served: the next ship removes it first.
+    writeFileSync(join(previewData, "users.json"), "real users");
+    writeFileSync(join(s.app, "preview-data.production"), "");
+    const reopened = s.run(["preview", "site", "abc4444"], { input: s.tarball(), env: local });
+    assert.equal(reopened.code, 0, reopened.err);
+    assert.ok(!existsSync(join(previewData, "users.json")));
   } finally {
     s.cleanup();
   }
