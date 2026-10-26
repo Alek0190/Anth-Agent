@@ -674,6 +674,33 @@ export class Store {
     return this.project(client, slug);
   }
 
+  /**
+   * DELETE /v1/projects/:client/:project: archive the project's sessions on this device (their files move to archive/,
+   * nothing is deleted), stop watching it and drop it from the catalog; its client goes too once it has no projects.
+   * Removing a project this device does not have is a no-op, so the hub can send it to every device and retry.
+   */
+  async removeProject(client: string, slug: string) {
+    const ref = `${client}/${slug}`;
+    const archived: string[] = [];
+    for (const row of this.list().filter((r) => r.project === ref)) {
+      await this.archive(row);
+      archived.push(row.id);
+    }
+    this.watcher.forget(ref);
+    this.catalog.exec("BEGIN");
+    try {
+      this.catalog.prepare("DELETE FROM projects WHERE client=? AND slug=?").run(client, slug);
+      const left = this.catalog.prepare("SELECT 1 FROM projects WHERE client=? LIMIT 1").get(client);
+      if (!left) this.catalog.prepare("DELETE FROM clients WHERE slug=?").run(client);
+      this.catalog.exec("COMMIT");
+    } catch (e) {
+      this.catalog.exec("ROLLBACK");
+      throw e;
+    }
+    this.notify();
+    return { removed: ref, archivedSessions: archived };
+  }
+
   /** Validate a session's project ref and environment. No project means no environment. */
   private placement(project: unknown, env: unknown): { project: string | null; env: EnvironmentName | null } {
     if (project === undefined || project === null || project === "") {

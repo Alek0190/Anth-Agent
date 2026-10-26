@@ -202,7 +202,9 @@ try {
     { name: "logo.png", mimeType: "image/png", buffer: png },
     { name: "icon.svg", mimeType: "image/svg+xml", buffer: svg },
   ]);
-  const chips = page.getByRole("list", { name: "Attached images" }).locator(".attachment:not(.attachment-adding)");
+  const chips = page
+    .getByRole("list", { name: "Attached images" })
+    .locator(".attachment:not(.attachment-adding)");
   await expect(chips).toHaveCount(2);
   await page.getByRole("button", { name: "Remove icon.svg" }).click();
   await expect(chips).toHaveCount(1);
@@ -228,10 +230,22 @@ try {
   await expect(
     chat().locator(".markdown").filter({ hasText: "Echo: The owner attached this file" }),
   ).toBeVisible({ timeout: 15000 });
-  await expect(chat().getByText(/\.anth\/uploads\/.*logo\.png \(PNG image/).first()).toBeVisible();
+  await expect(
+    chat()
+      .getByText(/\.anth\/uploads\/.*logo\.png \(PNG image/)
+      .first(),
+  ).toBeVisible();
   await expect(page.getByRole("list", { name: "Attached images" })).toHaveCount(0);
-  const saved = join(work, "project-alpha", ".anth", "uploads", new Date().toISOString().slice(0, 10), "logo.png");
-  if (!existsSync(saved) || !readFileSync(saved).equals(png)) throw Error(`logo.png was not saved at ${saved}`);
+  const saved = join(
+    work,
+    "project-alpha",
+    ".anth",
+    "uploads",
+    new Date().toISOString().slice(0, 10),
+    "logo.png",
+  );
+  if (!existsSync(saved) || !readFileSync(saved).equals(png))
+    throw Error(`logo.png was not saved at ${saved}`);
   pass("images: attach, remove, refuse a PDF, send without text; saved in the project folder");
 
   // Busy: queue + withdraw, reject-if-busy, steer, Escape interrupt.
@@ -688,7 +702,29 @@ try {
   await expect(
     page.locator(".tree-row.agent").filter({ hasText: "Backend developer" }),
   ).toBeVisible();
+  // A second task for the same role joins its row instead of adding one, and the role reads as one log: the newest
+  // task's transcript with the earlier tasks above it.
+  await send("delegate: backend | !echo second-task");
+  await expect(
+    chat()
+      .locator(".markdown")
+      .filter({ hasText: "Backend developer reports" })
+      .filter({ hasText: "second-task" }),
+  ).toBeVisible({ timeout: 20000 });
+  const backendRow = page.locator(".tree-row.agent").filter({ hasText: "Backend developer" });
+  await expect(backendRow).toHaveCount(1);
+  await expect(backendRow.locator(".role-count")).toHaveText("×2");
   await page.screenshot({ path: "/tmp/anth-net-team.png" });
+  await backendRow.click();
+  await expect(page.locator(".member-banner")).toContainText("2 tasks, the earlier ones above");
+  await expect(page.locator(".role-divider").first()).toContainText("Task 1");
+  await expect(page.locator(".role-divider.current")).toContainText("Task 2");
+  await expect(chat().getByText("from-the-team").first()).toBeVisible({ timeout: 10000 });
+  await expect(chat().getByText("second-task").first()).toBeVisible();
+  await expect(backendRow).toHaveClass(/sel/);
+  await page.screenshot({ path: "/tmp/anth-net-role-log.png" });
+  await page.getByRole("button", { name: "Message its owner" }).click();
+  pass("team roles: two tasks for one role share one row, and its log shows both");
   // Selecting the member warns that messages there never reach the Lead, and one click goes back to the owner.
   await expect(page.locator(".member-banner")).toHaveCount(0);
   await page.locator(".tree-row.agent").filter({ hasText: "Backend developer" }).click();
@@ -703,14 +739,16 @@ try {
   await page.getByRole("button", { name: "Message its owner" }).click();
   await expect(page.locator(".member-banner")).toHaveCount(0);
   await expect(
-    chat().locator(".markdown").filter({ hasText: "Backend developer reports" }),
+    chat().locator(".markdown").filter({ hasText: "Backend developer reports" }).first(),
   ).toBeVisible({ timeout: 10000 });
   await page.getByRole("switch", { name: "Lead a team" }).click();
   await expect(page.getByRole("switch", { name: "Lead a team" })).toHaveAttribute(
     "aria-checked",
     "false",
   );
-  pass("agent team: Team tab, model per role, a delegation shows the member in the tree, the member banner leads back");
+  pass(
+    "agent team: Team tab, model per role, a delegation shows the member in the tree, the member banner leads back",
+  );
 
   // Watch and fix: watch the project from the Watch tab, then three webhook events with one cause open an incident.
   await tab("Watch");
@@ -751,6 +789,32 @@ try {
   pass(
     "watch and fix: Watch tab setup, webhook events open an incident, its agent is one click away",
   );
+
+  // Remove the project: confirmed, it leaves the sidebar on both devices and its sessions are archived.
+  const removable = row("c/dental-co/p/booking-site");
+  await removable.hover();
+  await removable.getByRole("button", { name: "Remove project Booking site" }).click();
+  await expect(
+    page.locator(".modal, [role=dialog]").filter({ hasText: "Remove Booking site?" }),
+  ).toContainText("Nothing is deleted");
+  await page.screenshot({ path: "/tmp/anth-net-remove.png" });
+  await page.getByRole("button", { name: "Remove project", exact: true }).click();
+  await expect(row("c/dental-co/p/booking-site")).toHaveCount(0, { timeout: 15000 });
+  await expect(row("c/dental-co")).toHaveCount(0);
+  await expect(
+    page.locator(".tree-row.session").filter({ hasText: /Booking (build|staging)/ }),
+  ).toHaveCount(0);
+  for (const [id, tok] of [
+    ["box-a", tokenA],
+    ["box-b", tokenB],
+  ]) {
+    const res = await fetch(`http://127.0.0.1:${id === "box-a" ? portA : portB}/v1/projects`, {
+      headers: { authorization: `Bearer ${tok}` },
+    });
+    const left = await res.json();
+    if (left.some((p) => p.slug === "booking-site")) throw Error(`${id} still has the project`);
+  }
+  pass("remove a project: one confirm takes it off every device, its sessions archived");
 
   expect(errors).toEqual([]);
   pass("no browser runtime errors");

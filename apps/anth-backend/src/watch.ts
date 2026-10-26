@@ -290,6 +290,18 @@ export class Watcher {
     return { removed: project };
   }
 
+  /**
+   * The project is gone (DELETE /v1/projects/:client/:project): stop watching it and close its open incidents, whose
+   * sessions were archived with it. Events and incidents stay as history.
+   */
+  forget(project: string) {
+    this.host.db.prepare("DELETE FROM watches WHERE project=?").run(project);
+    this.host.db
+      .prepare("UPDATE incidents SET status='resolved',updatedAt=?,note=COALESCE(note,'Project removed') WHERE project=? AND status!='resolved'")
+      .run(Date.now(), project);
+    this.host.notify();
+  }
+
   /** The newest events of a project, newest first. */
   events(project: string, limit = 100): WatchEvent[] {
     const rows = this.host.db

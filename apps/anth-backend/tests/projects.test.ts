@@ -82,6 +82,16 @@ test("clients, projects and environments: upsert, placement, moves, tree, restar
       [after.sessions.find((s) => s.id === dev.id)?.project, after.sessions.find((s) => s.id === prod.id)?.env],
       ["dental-co/booking-site", "prod"],
     );
+
+    // Removing a project archives its sessions, drops it and its emptied client; the others stay.
+    const removed = await client.removeProject("dental-co", "booking-site");
+    assert.deepEqual(removed.archivedSessions.sort(), [dev.id, prod.id].sort());
+    const left = await client.tree();
+    assert.deepEqual(left.projects?.map((p) => `${p.client}/${p.slug}`), ["cafe-luna/menu-app"]);
+    assert.deepEqual(left.clients?.map((c) => c.slug), ["cafe-luna"]);
+    assert.deepEqual(left.sessions.map((s) => s.id), [loose.id]);
+    await assert.rejects(() => client.project("dental-co", "booking-site"), code("not_found"));
+    assert.deepEqual(await client.removeProject("dental-co", "booking-site"), { removed: "dental-co/booking-site", archivedSessions: [] }, "again is a no-op");
   } finally {
     await server.stop();
     await t.cleanup();

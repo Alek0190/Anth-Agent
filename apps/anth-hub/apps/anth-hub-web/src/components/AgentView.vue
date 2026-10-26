@@ -14,8 +14,10 @@ import {
   Pencil,
 } from "lucide-vue-next";
 import type { AgentSummary } from "@sdk/api";
-import { lineage } from "@sdk/models";
+import { lineage, roleGroups } from "@sdk/models";
 import TranscriptItem from "./TranscriptItem.vue";
+import { deviceClient } from "../client/hub";
+import RoleHistory from "./RoleHistory.vue";
 import DeviceIcon from "./DeviceIcon.vue";
 import Composer from "./Composer.vue";
 import {
@@ -24,6 +26,7 @@ import {
   agentHandle,
   agentState,
   device,
+  deviceId,
   notify,
   preset,
   select,
@@ -55,9 +58,27 @@ const source = (a: AgentSummary) =>
     : a.kind === "subagent"
       ? `Owned by agent #${a.ownerAgentId}`
       : "Root agent";
+/** Team members by role: every task a role was given is one member; the view shows them as one log. */
+const roles = computed(() => roleGroups(sessionAgents.value));
+const role = computed(() => (selected.value ? roles.value.get(selected.value.agentId) : undefined));
+const earlier = computed(() => role.value?.filter((a) => a.id < selected.value!.agentId) ?? []);
+// Reading a role's newest task when the Lead hands it another: follow on to the new one, so the role reads as one
+// conversation. A reader who opened an older task on purpose stays there.
+watch(role, (now, before) => {
+  const id = selected.value?.agentId;
+  const last = now?.at(-1)?.id;
+  if (id !== undefined && last !== undefined && before?.at(-1)?.id === id && last > id)
+    choose(last);
+});
 const choices = computed(() =>
   sessionAgents.value
-    .map((a) => ({ ...a, lineage: lineage(sessionAgents.value, a.id) }))
+    // One choice per role: its newest member, which shows the others above its own transcript.
+    .filter((a) => roles.value.get(a.id)?.at(-1)?.id === a.id || !roles.value.has(a.id))
+    .map((a) => ({
+      ...a,
+      lineage: lineage(sessionAgents.value, a.id),
+      tasks: roles.value.get(a.id)?.length ?? 0,
+    }))
     .sort((a, b) => {
       for (let i = 0; i < Math.min(a.lineage.length, b.lineage.length); i++)
         if (a.lineage[i].id !== b.lineage[i].id) return a.lineage[i].id - b.lineage[i].id;
@@ -84,14 +105,22 @@ function choose(id: number) {
   if (selected.value) select({ ...selected.value, agentId: id });
 }
 
-function fork(entryId: number) {
-  const handle = agentHandle.value;
+/** Fork the open agent at an entry, or an earlier member of its role shown in the role's log. */
+function fork(entryId: number, memberId?: number) {
   const t = selected.value;
+  const handle =
+    memberId === undefined
+      ? agentHandle.value
+      : t && deviceClient(t.deviceId).agent(t.sessionId, memberId);
   if (!handle || !t) return;
+  const name =
+    memberId === undefined
+      ? current.value?.name
+      : earlier.value.find((a) => a.id === memberId)?.name;
   ui.dialog = {
     kind: "prompt",
     title: "Fork conversation",
-    hint: `${current.value?.name ?? `Agent #${t.agentId}`} / entry #${entryId}. Leave the name blank to use Fork #ID.`,
+    hint: `${name ?? `Agent #${memberId ?? t.agentId}`} / entry #${entryId}. Leave the name blank to use Fork #ID.`,
     label: "Fork name",
     optional: true,
     placeholder: "e.g. Alternative approach",
@@ -250,6 +279,7 @@ watch(
             >
               <div class="conversation-choice-content">
                 <span class="choice-lineage">
+                  <span v-if="c.tasks > 1" class="choice-tasks">×{{ c.tasks }}</span>
                   <template v-for="(ancestor, index) in c.lineage" :key="ancestor.id">
                     <ChevronRight v-if="index" :size="18" aria-hidden="true" />
                     <span :class="{ 'choice-ancestor': index < c.lineage.length - 1 }">{{
@@ -276,7 +306,15 @@ watch(
         <p v-else>The agent keeps working on {{ device?.id }} while this view connects.</p>
       </div>
       <template v-else>
-        <div v-if="!items.length" class="chat-empty">
+        <RoleHistory
+          v-if="earlier.length && deviceId && selected"
+          :device-id="deviceId"
+          :session-id="selected.sessionId"
+          :members="earlier"
+          @open="choose"
+          @fork="(memberId, entryId) => fork(entryId, memberId)"
+        />
+        <div v-if="!items.length && !earlier.length" class="chat-empty">
           <div class="agent-orb"><img src="/icons/durable-pi.svg" alt="Anth-Agent" /><i /></div>
           <span class="eyebrow">YOUR DURABLE AGENT IS READY</span>
           <h2>A conversation with continuity.</h2>
@@ -319,8 +357,11 @@ watch(
     </div>
     <div v-if="current?.kind === 'subagent'" class="member-banner" role="status">
       <span
-        >You're viewing <b>{{ current.name || `agent #${current.id}` }}</b>, a team member. It works on one
-        task for its owner and can't delegate or ship, so what you send here goes to its owner.</span
+        >You're viewing <b>{{ current.name || `agent #${current.id}` }}</b
+        >, a team member<template v-if="role && role.length > 1">
+          ({{ role.length }} tasks, the earlier ones above)</template
+        >. It works on one task at a time for its owner and can't delegate or ship, so what you send
+        here goes to its owner.</span
       >
       <button
         v-if="current.ownerAgentId !== undefined"

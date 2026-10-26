@@ -11,7 +11,7 @@ import type {
   TaskNode,
 } from "@sdk/api";
 import { sumUsage } from "@sdk/transcript";
-import { lineage, placementKeys } from "@sdk/models";
+import { agentPath, lineage, placementKeys } from "@sdk/models";
 import { HubStream } from "./stream";
 import { deviceClient, hub, message } from "./hub";
 import { useAgent, useDevice, useNetwork, useSession, type AgentTarget } from "./composables";
@@ -94,26 +94,16 @@ function reveal() {
   const summary = network.devices.value
     .find((d) => d.id === t.deviceId)
     ?.tree?.sessions.find((s) => s.id === t.sessionId);
-  const agents = summary?.agents;
-  const byId = new Map((agents ?? []).map((a) => [a.id, a]));
+  // The rows above it, its role row for a team member (several members share one row).
+  const path = summary ? agentPath(t.deviceId, summary, t.agentId) : [];
   const keys = [
     ...(summary?.project ? placementKeys(summary.project, summary.env ?? "dev") : []),
     t.deviceId,
-    `${t.deviceId}/s/${t.sessionId}`,
-    `${t.deviceId}/s/${t.sessionId}/a/${t.agentId}`,
+    ...path,
   ];
-  let current = byId.get(t.agentId);
-  const seen = new Set<number>();
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id);
-    const parent = current.parentId ?? current.ownerAgentId;
-    if (parent === undefined) break;
-    keys.push(`${t.deviceId}/s/${t.sessionId}/a/${parent}`);
-    current = byId.get(parent);
-  }
   if (keys.some((k) => !expanded.value.has(k)))
     expanded.value = new Set([...expanded.value, ...keys]);
-  if (byId.has(t.agentId)) pendingReveal = false;
+  if (path.length) pendingReveal = false;
 }
 watch(() => network.devices.value, reveal);
 

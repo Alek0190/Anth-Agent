@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AgentModel, SessionModel, networkTree, projectTree, placementKeys, lineage } from "../src/models.js";
+import { AgentModel, SessionModel, networkTree, projectTree, placementKeys, lineage, roleMembers, agentPath } from "../src/models.js";
 import { toMarkdown, toTranscript, sumUsage } from "../src/transcript.js";
 import type {
   AgentSummary,
@@ -200,6 +200,57 @@ test("session lineage and network tree nest forks and subagents", () => {
   assert.deepEqual(main.children.map((n) => n.type === "agent" && n.agent.id), [4]);
   assert.deepEqual(main.children[0].children.map((n) => n.type === "agent" && n.agent.id), [6]);
   assert.equal(networkTree([{ ...device, status: "offline" }])[0].stale, true);
+});
+
+test("team members of one role under one row share a row that opens the newest", () => {
+  const member = (id: number, name: string, ownerAgentId = 1, busy = false): AgentSummary => ({
+    id, name, named: true, kind: "subagent", ownerAgentId, ownerTaskId: id * 10, busy, background: 0,
+  });
+  const agents: AgentSummary[] = [
+    { id: 1, name: "Main", named: false, kind: "root", busy: false, background: 0 },
+    member(5, "Backend developer"),
+    member(6, "Reviewer"),
+    member(8, "Backend developer", 1, true),
+    { id: 9, name: "Subagent #9", named: false, kind: "subagent", ownerAgentId: 1, ownerTaskId: 90, busy: false, background: 0 },
+    member(11, "Tester", 8),
+    member(12, "Backend developer"),
+    member(13, "Tester", 12),
+    member(14, "Backend developer", 99),
+    member(15, "Backend developer", 99),
+  ];
+  const device: NetworkDevice = {
+    id: "box", name: "Box", kind: "ssh", url: "http://box:4780", source: "config", hasToken: true, status: "online",
+    tree: { uid: "u", name: "box", at: 1, sessions: [{ id: "s1", name: "S", cwd: "/w", model: "m", createdAt: 1, dbPath: "/d", busy: false, agents }] },
+  };
+  const rows = networkTree([device])[0].children[0].children;
+  type Row = Extract<(typeof rows)[number], { type: "agent" }>;
+  const [main, orphans] = rows as Row[];
+  // Unnamed subagents stay single; the three Backend developers become one row in the newest one's place.
+  assert.deepEqual(main.children.map((n) => (n as Row).agent.name), ["Reviewer", "Subagent #9", "Backend developer"]);
+  const backend = main.children[2] as Row;
+  assert.equal(backend.agent.id, 12, "the row opens the newest member");
+  assert.deepEqual(backend.group!.map((a) => a.id), [5, 8, 12]);
+  assert.equal(backend.key, "box/s/s1/a/1/role/Backend developer");
+  // Members' own members merge too: the Testers the Backend developers delegated to are one row.
+  assert.deepEqual(backend.children.map((n) => (n as Row).agent.id), [13]);
+  assert.deepEqual((backend.children[0] as Row).group!.map((a) => a.id), [11, 13]);
+  assert.deepEqual((main.children[0] as Row).group!.map((a) => a.id), [6], "a role with one member is still keyed by role");
+  assert.equal((main.children[0] as Row).key, "box/s/s1/a/1/role/Reviewer");
+  assert.equal((main.children[1] as Row).group, undefined, "an unnamed subagent is no team member");
+  // Members whose owner is gone still group among themselves.
+  assert.deepEqual(orphans.group!.map((a) => a.id), [14, 15]);
+  assert.equal(orphans.key, "box/s/s1/role/Backend developer");
+  assert.deepEqual(roleMembers(agents, 8).map((a) => a.id), [5, 8, 12]);
+  assert.deepEqual(roleMembers(agents, 13).map((a) => a.id), [11, 13]);
+  assert.deepEqual(roleMembers(agents, 1).map((a) => a.id), [1]);
+  const summary = device.tree!.sessions[0];
+  assert.deepEqual(agentPath("box", summary, 11), [
+    "box/s/s1",
+    "box/s/s1/a/1",
+    "box/s/s1/a/1/role/Backend developer",
+    "box/s/s1/a/1/role/Backend developer/role/Tester",
+  ]);
+  assert.deepEqual(agentPath("box", summary, 404), []);
 });
 
 test("project tree merges clients and projects across devices; unassigned sessions stay under devices", () => {

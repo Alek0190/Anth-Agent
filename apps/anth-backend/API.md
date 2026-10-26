@@ -23,6 +23,7 @@ The contract every Durable Agent Network client uses: the web hub, `anth-tui`, s
 | `GET /v1/projects` | | `ProjectSummary[]` `{client, slug, name, createdAt}` |
 | `PUT /v1/projects/:client/:project` | `{name, clientName?}` | `ProjectSummary`. Creates the project (and its client, named `clientName`, when missing) or renames it. The ref `<client>/<project>` is the project's id on every device: register it on each device that runs one of its environments |
 | `GET /v1/projects/:client/:project` | | the project plus `sessions` (ids on this device) |
+| `DELETE /v1/projects/:client/:project` | | `{removed, archivedSessions}`. Archives the project's sessions on this device (files move to `archive/`, nothing is deleted), stops watching it, closes its open incidents and drops it; its client goes too once it has no projects. A project this device does not have is a no-op, so a client sends it to every device |
 | `GET /v1/events` | `?docs=app.shared-state` | device stream |
 | `GET /v1/fs/dirs` | `?path=` (empty = start dirs) | `{path, parent, dirs[]}`, one level, directories only |
 | `GET /v1/docs/app.shared-state` | | `{kind, value, revision}` |
