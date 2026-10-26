@@ -382,7 +382,13 @@ export type TreeNode =
       key: string;
       deviceId: string;
       sessionId: string;
+      /** The agent the row opens: for a role group, its newest member. */
       agent: AgentSummary;
+      /**
+       * Every member of a role, oldest first: one row stands for all the team members of one role (say every
+       * "Reviewer" the Lead delegated to). Absent for an agent that is not a team member.
+       */
+      group?: AgentSummary[];
       stale: boolean;
       children: TreeNode[];
     };
@@ -400,9 +406,62 @@ export const sessionKey = (deviceId: string, sessionId: string) => `${deviceId}/
 export const agentKey = (deviceId: string, sessionId: string, agentId: number) =>
   `${deviceId}/s/${sessionId}/a/${agentId}`;
 
-/** Nest agents under the agent they forked from or the agent whose task owns them. */
+/**
+ * Team members that do one role: named subagents with the same name under the same row. Each task the Lead (or a ship
+ * job) hands out starts a fresh member conversation, so a busy project has hundreds of "Reviewer" conversations; shown
+ * as one role they stay readable.
+ */
+export const isRoleMember = (a: AgentSummary) => a.kind === "subagent" && a.named;
+
+/**
+ * Each team member's role, as the tree groups them: member id → every member of its role row, oldest first. Agents
+ * that are not team members are not in the map.
+ */
+export function roleGroups(agents: readonly AgentSummary[]): Map<number, AgentSummary[]> {
+  const groups = new Map<number, AgentSummary[]>();
+  /** Record every role row's members, depth first. */
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.type !== "agent") continue;
+      for (const member of node.group ?? []) groups.set(member.id, node.group!);
+      walk(node.children);
+    }
+  };
+  walk(agentTree("", { id: "", agents } as unknown as SessionSummary, false));
+  return groups;
+}
+
+/** The members of the role row `agentId` belongs to, oldest first; just the agent when it is no team member. */
+export function roleMembers(agents: readonly AgentSummary[], agentId: number): AgentSummary[] {
+  return roleGroups(agents).get(agentId) ?? agents.filter((a) => a.id === agentId);
+}
+
+/**
+ * Keys of the rows from the session down to the row that shows `agentId` (its role row for a team member), so a client
+ * can expand them to reveal it. Empty when the session does not list the agent.
+ */
+export function agentPath(deviceId: string, session: SessionSummary, agentId: number): string[] {
+  /** The keys down to the row showing the agent, or undefined when it is not under these rows. */
+  const walk = (nodes: TreeNode[], path: string[]): string[] | undefined => {
+    for (const node of nodes) {
+      if (node.type !== "agent") continue;
+      const here = [...path, node.key];
+      if (node.agent.id === agentId || node.group?.some((a) => a.id === agentId)) return here;
+      const inner = walk(node.children, here);
+      if (inner) return inner;
+    }
+    return undefined;
+  };
+  return walk(agentTree(deviceId, session, false), [sessionKey(deviceId, session.id)]) ?? [];
+}
+
+/**
+ * Nest agents under the agent they forked from or the agent whose task owns them. Team members of one role under the
+ * same row share one row (keyed by role, so it holds as members come), which opens the newest of them.
+ */
 export function agentTree(deviceId: string, session: SessionSummary, stale: boolean): TreeNode[] {
-  const nodes = new Map<number, Extract<TreeNode, { type: "agent" }>>();
+  type AgentNode = Extract<TreeNode, { type: "agent" }>;
+  const nodes = new Map<number, AgentNode>();
   for (const agent of session.agents)
     nodes.set(agent.id, {
       type: "agent",
@@ -419,7 +478,44 @@ export function agentTree(deviceId: string, session: SessionSummary, stale: bool
     if (parent && parent !== node) parent.children.push(node);
     else roots.push(node);
   }
-  return roots;
+  /** Merge each list's team members by role (`top`: the session's top rows, where an orphan's owner is missing). */
+  const group = (list: TreeNode[], parentKey: string, top = false): TreeNode[] => {
+    const out: TreeNode[] = [];
+    const roles = new Map<string, AgentNode>();
+    for (const node of list as AgentNode[]) {
+      if (!isRoleMember(node.agent)) {
+        out.push(node);
+        continue;
+      }
+      // Keyed by the row it sits under, so the key holds while members come and go. A member whose owner row is
+      // missing sits at the top: its owner's id keeps it apart from same-named members of other owners.
+      const owner = node.agent.parentId ?? node.agent.ownerAgentId;
+      const key =
+        top && owner !== undefined
+          ? `${parentKey}/a/${owner}/role/${node.agent.name}`
+          : `${parentKey}/role/${node.agent.name}`;
+      const row = roles.get(key);
+      if (!row) {
+        const first: AgentNode = { ...node, key, group: [node.agent], children: [...node.children] };
+        roles.set(key, first);
+        out.push(first);
+        continue;
+      }
+      row.group!.push(node.agent);
+      row.children.push(...node.children);
+      // The row opens the newest member, and sits where the newest member would.
+      if (node.agent.id > row.agent.id) {
+        row.agent = node.agent;
+        out.splice(out.indexOf(row), 1);
+        out.push(row);
+      }
+    }
+    // Children are grouped after the merge, so the members' own members of one role join up too.
+    for (const node of out as AgentNode[]) node.children = group(node.children, node.key);
+    for (const row of roles.values()) row.group!.sort((a, b) => a.id - b.id);
+    return out;
+  };
+  return group(roots, sessionKey(deviceId, session.id), true);
 }
 
 /** A session row with its agents nested under it; the key is the same wherever the session shows. */

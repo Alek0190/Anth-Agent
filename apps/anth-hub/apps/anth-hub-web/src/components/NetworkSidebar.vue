@@ -56,12 +56,14 @@ const isOnline = (node: TreeNode) =>
   node.type === "client" || node.type === "project" || node.type === "env"
     ? !node.stale
     : deviceOf(node)?.status === "online";
+/** A role row is selected while any of its members is open. */
 const isSelected = (node: TreeNode) =>
   node.type === "agent" &&
   selected.value?.deviceId === node.deviceId &&
   selected.value.sessionId === node.sessionId &&
-  selected.value.agentId === node.agent.id;
+  (node.group ?? [node.agent]).some((a) => a.id === selected.value!.agentId);
 
+/** Click or Enter on a row: open an agent or a session's root, expand anything else. */
 function activate(node: TreeNode) {
   focusKey.value = node.key;
   if (
@@ -78,11 +80,13 @@ function activate(node: TreeNode) {
   if (root) select({ deviceId: node.deviceId, sessionId: node.session.id, agentId: root.id });
 }
 
+/** A row's action button: new project, session or agent, check, assign, rename, archive or remove. */
 async function action(node: TreeNode, name: string) {
   if (node.type === "client") {
     if (name === "new-project") ui.dialog = { kind: "new-project", client: node.client.slug };
     return;
   }
+  if (node.type === "project" && name === "remove-project") return removeProject(node);
   if (node.type === "project" || node.type === "env") {
     const ref = `${node.project.client}/${node.project.slug}`;
     if (name === "new-session")
@@ -146,6 +150,37 @@ async function action(node: TreeNode, name: string) {
       submit: "Save name",
       run: (value) => client.agent(node.sessionId, a.id).rename(value),
     };
+}
+
+/** Remove a project from every device that has it: its sessions are archived there, nothing is deleted. */
+function removeProject(node: Extract<TreeNode, { type: "project" }>) {
+  const { client, slug, name } = node.project;
+  const sessions = node.children.reduce((n, env) => n + env.children.length, 0);
+  const offline = node.deviceIds.filter(
+    (id) => network.devices.value.find((d) => d.id === id)?.status !== "online",
+  );
+  ui.dialog = {
+    kind: "prompt",
+    title: `Remove ${name}?`,
+    hint:
+      `${sessions ? `Stops its ${sessions} session${sessions === 1 ? "" : "s"} and moves their files to archive/ on ${node.deviceIds.join(", ")}. ` : ""}` +
+      `Stops watching it and takes it off the sidebar. Nothing is deleted.` +
+      (offline.length
+        ? ` ${offline.join(", ")} is offline: it keeps the project until you remove it again.`
+        : ""),
+    submit: "Remove project",
+    danger: true,
+    run: async () => {
+      const ref = `${client}/${slug}`;
+      const online = node.deviceIds.filter((id) => !offline.includes(id));
+      await Promise.all(online.map((id) => deviceClient(id).removeProject(client, slug)));
+      const open = network.devices.value
+        .find((d) => d.id === selected.value?.deviceId)
+        ?.tree?.sessions.find((s) => s.id === selected.value?.sessionId);
+      if (open?.project === ref) select(undefined);
+      notify(`Removed ${name}. Its sessions are in archive/.`);
+    },
+  };
 }
 
 function move(delta: number) {

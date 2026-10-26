@@ -3,13 +3,13 @@
 .ext-card {
   margin-top: 12px;
   padding: 13px 14px;
-  border: 1px solid #453536;
-  border-left: 3px solid #5a3a3e;
+  border: 1px solid #2c3f4e;
+  border-left: 3px solid #374c5d;
   border-radius: 8px;
-  background: #241819;
+  background: #131f29;
 }
 .ext-card.on {
-  border-left-color: #6fcf97;
+  border-left-color: #6ee7b7;
 }
 .ext-head {
   display: flex;
@@ -40,7 +40,7 @@
   list-style: none;
   margin: 12px 0 0;
   padding: 10px 0 0;
-  border-top: 1px solid #3c2b2d;
+  border-top: 1px solid #243543;
   display: grid;
   gap: 10px;
 }
@@ -72,7 +72,7 @@
 }
 .ext-prompts summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-soft);
 }
 .ext-prompts pre {
   max-height: 260px;
@@ -80,7 +80,7 @@
   margin: 6px 0 0;
   padding: 9px;
   white-space: pre-wrap;
-  background: #180f10;
+  background: #0c141b;
   border-radius: 6px;
   font-size: 16px;
 }
@@ -110,7 +110,7 @@
 }
 .team-role .ext-head code {
   font-size: 13px;
-  border: 1px solid #443738;
+  border: 1px solid #2d3f4e;
   border-radius: 4px;
   padding: 0 5px;
 }
@@ -157,7 +157,7 @@
   color: var(--muted);
 }
 .watch-panel .meta .err {
-  color: #ff8a80;
+  color: #fca5a5;
 }
 .watch-panel .webhook {
   display: block;
@@ -175,17 +175,17 @@
 }
 .incident .incident-status {
   font-size: 13px;
-  border: 1px solid #443738;
+  border: 1px solid #2d3f4e;
   border-radius: 4px;
   padding: 0 6px;
 }
 .incident.fixing,
 .incident.shipping,
 .incident.needs-you {
-  border-left-color: #ff8a80;
+  border-left-color: #fca5a5;
 }
 .incident.resolved {
-  border-left-color: #6fcf97;
+  border-left-color: #6ee7b7;
   opacity: 0.75;
 }
 .incident button {
@@ -206,7 +206,7 @@
   align-items: baseline;
   padding: 4px 6px;
   border-radius: 6px;
-  background: #241819;
+  background: #131f29;
 }
 .watch-events .msg {
   overflow: hidden;
@@ -223,15 +223,15 @@
   font-family: "IBM Plex Mono", monospace;
   border-radius: 4px;
   padding: 0 5px;
-  border: 1px solid #443738;
+  border: 1px solid #2d3f4e;
 }
 .watch-events .incident .verdict {
-  color: #ff9aa4;
-  border-color: #7a3d43;
+  color: #fca5a5;
+  border-color: #7f1d1d;
 }
 .watch-events .suspicious .verdict {
   color: #f2d48a;
-  border-color: #6a5a32;
+  border-color: #3a5062;
 }
 .watch-events .normal .verdict {
   color: #9fe0b5;

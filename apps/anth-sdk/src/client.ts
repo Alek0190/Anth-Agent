@@ -172,6 +172,11 @@ export class AnthClient {
     return this.request<ProjectSummary>("PUT", `/v1/projects/${enc(client)}/${enc(slug)}`, body);
   }
 
+  /** Archive the project's sessions on this device, stop watching it and drop it (and an emptied client). */
+  removeProject(client: string, slug: string) {
+    return this.request<{ removed: string; archivedSessions: string[] }>("DELETE", `/v1/projects/${enc(client)}/${enc(slug)}`);
+  }
+
   // ------------------------------------------------------------ watch and fix
   /** The watch on a project's production, or a not_found error when this device does not watch it. */
   watch(client: string, slug: string) {

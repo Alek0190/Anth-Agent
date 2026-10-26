@@ -104,6 +104,10 @@ export function v1(store: Store) {
   r.put("/projects/:client/:project", (req, res) =>
     res.json(store.upsertProject(param(req, "client"), param(req, "project"), req.body ?? {})),
   );
+  r.delete(
+    "/projects/:client/:project",
+    route(async (req, res) => res.json(await store.removeProject(param(req, "client"), param(req, "project")))),
+  );
 
   // ---------------------------------------------------------- sessions
   r.get("/sessions", route(async (_req, res) => res.json((await store.tree()).sessions)));

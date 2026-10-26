@@ -62,8 +62,8 @@ function choose(role: TeamInfo["roles"][number], value: string) {
     </div>
     <p class="hint">
       The main agent leads: it plans, then delegates each task to a member with its own model and
-      tools. Members show in the tree under the Lead while they work, and every delegation survives
-      restarts.
+      tools. Each role is one row in the tree under the Lead, with every task it was given in one
+      log, and every delegation survives restarts.
     </p>
     <p v-if="!data" class="task-empty">Loading the team…</p>
     <template v-else>

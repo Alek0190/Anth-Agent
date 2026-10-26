@@ -77,11 +77,11 @@
 .rail-device:hover,
 .rail-tab:hover {
   background: #ffffff0a;
-  color: #f2eeee;
+  color: #f4f7fa;
 }
 .rail-tab.active {
-  color: var(--accent);
-  background: #ff899714;
+  color: var(--accent-soft);
+  background: #8b5cf614;
 }
 .rail-device .dot {
   position: absolute;
@@ -90,7 +90,7 @@
   width: 8px;
   height: 8px;
   flex-basis: 8px;
-  box-shadow: 0 0 0 2px #181213;
+  box-shadow: 0 0 0 2px #0d161d;
 }
 .rail-tab .count {
   position: absolute;
@@ -102,11 +102,11 @@
   line-height: 16px;
   border-radius: 8px;
   background: var(--accent);
-  color: #1a1012;
+  color: #0d161d;
   padding: 0 4px;
 }
 .inspector .panel-rail {
-  background: #1c1516;
+  background: #0f1922;
 }
 .inspector-tabs .panel-toggle {
   margin-left: auto;
@@ -118,7 +118,7 @@
 }
 .device-icon.exe,
 .device-icon.apple {
-  color: #e9e2e2;
+  color: #e3e9ef;
 }
 
 /* ---------------------------------------------------------------- tree */
@@ -126,7 +126,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #181213;
+  background: #0d161d;
   border-right: 1px solid var(--line);
 }
 .tree-head {
@@ -150,10 +150,10 @@
   padding: 4px 6px 12px;
   outline: none;
   scrollbar-width: thin;
-  scrollbar-color: #473537 transparent;
+  scrollbar-color: #2d404f transparent;
 }
 .tree-list:focus-visible {
-  box-shadow: inset 0 0 0 1px #856669;
+  box-shadow: inset 0 0 0 1px #5b7890;
 }
 .tree-empty {
   padding: 12px 10px;
@@ -184,20 +184,20 @@
   font-size: 12px;
   border-radius: 4px;
   padding: 1px 6px;
-  border: 1px solid #443738;
-  color: #e9e2e2;
+  border: 1px solid #2d3f4e;
+  color: #e3e9ef;
 }
 .env-badge.dev {
   border-color: #3f5f4b;
   color: #9fe0b5;
 }
 .env-badge.staging {
-  border-color: #6a5a32;
+  border-color: #3a5062;
   color: #f2d48a;
 }
 .env-badge.prod {
-  border-color: #7a3d43;
-  color: #ff9aa4;
+  border-color: #7f1d1d;
+  color: #fca5a5;
 }
 .tree-row {
   --depth: 0;
@@ -210,17 +210,17 @@
   border-radius: 6px;
   cursor: pointer;
   font-size: 15px;
-  color: #e9e2e2;
+  color: #e3e9ef;
   white-space: nowrap;
 }
 .tree-row:hover {
   background: #ffffff08;
 }
 .tree-row.focus {
-  box-shadow: inset 0 0 0 1px #6d5557;
+  box-shadow: inset 0 0 0 1px #496379;
 }
 .tree-row.sel {
-  background: #ff899714;
+  background: #8b5cf614;
 }
 .tree-row.sel::before {
   content: "";
@@ -262,11 +262,28 @@
   color: var(--muted);
 }
 .tree-row .ico.root {
-  color: var(--accent);
+  color: var(--accent-soft);
+}
+/* A team role: one row for every task the Lead handed that role. */
+.tree-row .ico.role {
+  color: var(--accent-soft);
+}
+.tree-row .role-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 18px;
+}
+.tree-row .acts .icon-button.danger:hover:not(:disabled) {
+  color: var(--error);
 }
 .tree-row .badge {
   font-size: 12px;
-  border: 1px solid #443738;
+  border: 1px solid #2d3f4e;
   border-radius: 4px;
   padding: 1px 5px;
   color: var(--muted);
@@ -285,13 +302,13 @@
   flex: 1;
 }
 .tree-row .meta.err {
-  color: #ff8a80;
+  color: #fca5a5;
 }
 .tree-row .acts {
   margin-left: auto;
   display: none;
   gap: 2px;
-  background: #181213;
+  background: #0d161d;
   border-radius: 6px;
 }
 .tree-row:hover .acts,
@@ -333,21 +350,21 @@
   border-radius: 50%;
   display: inline-block;
   flex: 0 0 9px;
-  background: #756062;
+  background: #526d83;
 }
 .dot.on {
-  background: #6fcf97;
-  box-shadow: 0 0 6px #6fcf9766;
+  background: #6ee7b7;
+  box-shadow: 0 0 6px #6ee7b766;
 }
 .dot.chk {
   background: var(--secondary);
   animation: anth-pulse 1.1s ease-in-out infinite;
 }
 .dot.err {
-  background: #ff6b6b;
+  background: #f87171;
 }
 .dot.off {
-  background: #5a4a4b;
+  background: #3d5467;
 }
 .dot.work {
   background: var(--accent);
@@ -373,7 +390,7 @@
   position: relative;
 }
 .tree-resizer:hover {
-  background: #ff899733;
+  background: #8b5cf633;
 }
 
 /* ---------------------------------------------------------------- agent header + transcript */
@@ -385,7 +402,7 @@
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
-  scrollbar-color: #67464c transparent;
+  scrollbar-color: #41596c transparent;
   padding: 2px 0;
 }
 .crumb {
@@ -396,15 +413,15 @@
   flex: 0 0 auto;
   padding: 5px 10px 6px;
   border-radius: 8px;
-  color: #e9e2e2;
+  color: #e3e9ef;
   max-width: 260px;
 }
 .crumb:hover {
   background: #ffffff0a;
 }
 .crumb.current {
-  background: #ff899714;
-  color: var(--accent);
+  background: #8b5cf614;
+  color: var(--accent-soft);
 }
 .crumb-kind {
   font-size: 11px;
@@ -453,7 +470,7 @@
 .history-divider::after {
   content: "";
   flex: 1;
-  border-top: 1px dashed #4a3b3c;
+  border-top: 1px dashed #314454;
 }
 .entry.history {
   opacity: 0.6;
@@ -496,7 +513,7 @@
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 4px;
-  background: #161011;
+  background: #0c141a;
 }
 .dir-item {
   width: 100%;
@@ -504,13 +521,13 @@
   padding: 6px 8px;
   border-radius: 5px;
   font-size: 15px;
-  color: #e9e2e2;
+  color: #e3e9ef;
 }
 .dir-item:hover {
   background: #ffffff0a;
 }
 .dir-item[aria-selected="true"] {
-  background: #ff899714;
+  background: #8b5cf614;
   color: #fff;
 }
 .dir-item span {
@@ -525,18 +542,21 @@
   margin-top: 18px;
   padding: 12px;
   border-radius: 8px;
-  border: 1px solid #544042;
+  border: 1px solid #374c5d;
   overflow-wrap: anywhere;
 }
 .device-result.online {
-  border-color: #6fcf9777;
+  border-color: #6ee7b777;
 }
 .device-result:not(.online) {
-  border-color: #ff6b6b77;
+  border-color: #f8717177;
 }
 .primary.danger {
-  background: #c94f5d;
-  border-color: #c94f5d;
+  background: #dc2626;
+  border-color: #dc2626;
+}
+.primary.danger:hover {
+  background: #b91c1c;
 }
 
 /* ---------------------------------------------------------------- offline panel */
@@ -553,7 +573,7 @@
 }
 .offline-panel.unauthorized svg,
 .offline-panel.mismatch svg {
-  color: #ff6b6b;
+  color: #f87171;
 }
 .offline-error {
   font-family: "IBM Plex Mono", monospace;
@@ -567,7 +587,7 @@
   margin: 10px 0 4px;
   padding: 10px 14px;
   border-radius: 8px;
-  background: #0f0a0b;
+  background: #080d11;
   border: 1px solid var(--line);
 }
 .offline-command code {
@@ -608,7 +628,7 @@
     position: absolute;
     inset: 0;
     z-index: 29;
-    background: #0d080899;
+    background: #070b0e99;
   }
 }
 @media (max-width: 760px) {
@@ -636,7 +656,7 @@
     position: absolute;
     inset: 0;
     z-index: 39;
-    background: #0d080899;
+    background: #070b0e99;
   }
   .network-summary,
   .new-agent-button {
@@ -680,8 +700,8 @@
   margin: 0;
   padding: 6px;
   list-style: none;
-  background: #251a1b;
-  border: 1px solid #544042;
+  background: #14212b;
+  border: 1px solid #374c5d;
   border-radius: 10px;
   box-shadow: 0 20px 60px #0007;
   z-index: 20;
@@ -697,10 +717,10 @@
   cursor: pointer;
 }
 .slash-menu li.active {
-  background: #ff899714;
+  background: #8b5cf614;
 }
 .slash-menu code {
-  color: var(--accent);
+  color: var(--accent-soft);
   font-size: 15px;
 }
 .slash-args {
@@ -719,10 +739,10 @@
   font-size: 12px;
   border-radius: 4px;
   padding: 1px 6px;
-  color: #1a1012;
-  background: #ff8a80;
+  color: #0d161d;
+  background: #fca5a5;
   font-weight: 650;
 }
 .tree-row .ico.watching {
-  color: #6fcf97;
+  color: #6ee7b7;
 }

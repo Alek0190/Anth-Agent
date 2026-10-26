@@ -16,6 +16,8 @@ import {
   Plus,
   RefreshCw,
   Archive,
+  Trash2,
+  Users,
 } from "lucide-vue-next";
 import DeviceIcon from "./DeviceIcon.vue";
 import type { TreeNode } from "@sdk/models";
@@ -42,12 +44,19 @@ const projectCount = computed(() => clientNode.value?.children.length ?? 0);
 const sessionCount = computed(() =>
   (projectNode.value?.children ?? []).reduce((n, env) => n + env.children.length, 0),
 );
+/** Every member a role row stands for (oldest first); just the agent for any other agent row. */
+const members = computed(() =>
+  props.node.type === "agent" ? (props.node.group ?? [props.node.agent]) : [],
+);
+const role = computed(() =>
+  props.node.type === "agent" && props.node.group ? props.node.group : undefined,
+);
 const background = computed(() =>
   session.value
     ? session.value.agents.reduce((n, a) => n + a.background, 0)
-    : (agent.value?.background ?? 0),
+    : members.value.reduce((n, a) => n + a.background, 0),
 );
-const busy = computed(() => session.value?.busy || agent.value?.busy);
+const busy = computed(() => session.value?.busy || members.value.some((a) => a.busy));
 const statusText = computed(() => {
   const d = device.value;
   if (!d) return "";
@@ -92,6 +101,10 @@ const title = computed(() => {
   if (session.value)
     return `${session.value.name}\n${props.node.type === "session" ? props.node.deviceId : ""}:${session.value.cwd}`;
   const a = agent.value!;
+  if (role.value)
+    return role.value.length > 1
+      ? `${a.name}: ${role.value.length} tasks for agent #${a.ownerAgentId}. Opens the newest; the earlier ones are in its log.`
+      : `${a.name}: team member of agent #${a.ownerAgentId}`;
   return a.kind === "fork"
     ? `Fork of agent #${a.parentId} at entry #${a.forkedAt}`
     : a.kind === "subagent"
@@ -165,7 +178,15 @@ const title = computed(() => {
           title="New session in this project"
           @click="emit('action', 'new-session')"
         >
-          <Plus :size="16" />
+          <Plus :size="16" /></button
+        ><button
+          class="icon-button danger"
+          :disabled="!online"
+          :aria-label="`Remove project ${label}`"
+          title="Remove project from the sidebar (its sessions are archived)"
+          @click="emit('action', 'remove-project')"
+        >
+          <Trash2 :size="16" />
         </button>
       </span>
     </template>
@@ -262,9 +283,13 @@ const title = computed(() => {
     </template>
     <template v-else-if="agent">
       <GitFork v-if="agent.kind === 'fork'" class="ico" :size="16" />
+      <Users v-else-if="role" class="ico role" :size="16" />
       <CornerDownRight v-else-if="agent.kind === 'subagent'" class="ico" :size="16" />
       <MessageSquare v-else class="ico root" :size="16" />
       <span class="name">{{ label }}</span>
+      <span v-if="role && role.length > 1" class="role-count" :aria-label="`${role.length} tasks`"
+        >×{{ role.length }}</span
+      >
       <span v-if="agent.kind === 'fork' && agent.forkedAt !== undefined" class="meta"
         >@ #{{ agent.forkedAt }}</span
       >
@@ -272,7 +297,7 @@ const title = computed(() => {
       <span v-if="background" class="bg-count" :title="`${background} background task(s)`"
         ><i class="dot bg" />{{ background }}</span
       >
-      <span class="acts" @click.stop>
+      <span v-if="!role" class="acts" @click.stop>
         <button
           class="icon-button"
           :disabled="!online"
