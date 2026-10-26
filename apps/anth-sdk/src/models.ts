@@ -419,6 +419,7 @@ export const isRoleMember = (a: AgentSummary) => a.kind === "subagent" && a.name
  */
 export function roleGroups(agents: readonly AgentSummary[]): Map<number, AgentSummary[]> {
   const groups = new Map<number, AgentSummary[]>();
+  /** Record every role row's members, depth first. */
   const walk = (nodes: TreeNode[]) => {
     for (const node of nodes) {
       if (node.type !== "agent") continue;
@@ -440,6 +441,7 @@ export function roleMembers(agents: readonly AgentSummary[], agentId: number): A
  * can expand them to reveal it. Empty when the session does not list the agent.
  */
 export function agentPath(deviceId: string, session: SessionSummary, agentId: number): string[] {
+  /** The keys down to the row showing the agent, or undefined when it is not under these rows. */
   const walk = (nodes: TreeNode[], path: string[]): string[] | undefined => {
     for (const node of nodes) {
       if (node.type !== "agent") continue;
@@ -476,7 +478,8 @@ export function agentTree(deviceId: string, session: SessionSummary, stale: bool
     if (parent && parent !== node) parent.children.push(node);
     else roots.push(node);
   }
-  const group = (list: TreeNode[], parentKey: string): TreeNode[] => {
+  /** Merge each list's team members by role (`top`: the session's top rows, where an orphan's owner is missing). */
+  const group = (list: TreeNode[], parentKey: string, top = false): TreeNode[] => {
     const out: TreeNode[] = [];
     const roles = new Map<string, AgentNode>();
     for (const node of list as AgentNode[]) {
@@ -484,8 +487,13 @@ export function agentTree(deviceId: string, session: SessionSummary, stale: bool
         out.push(node);
         continue;
       }
-      // Keyed by the row it sits under, so the key holds while members come and go.
-      const key = `${parentKey}/role/${node.agent.name}`;
+      // Keyed by the row it sits under, so the key holds while members come and go. A member whose owner row is
+      // missing sits at the top: its owner's id keeps it apart from same-named members of other owners.
+      const owner = node.agent.parentId ?? node.agent.ownerAgentId;
+      const key =
+        top && owner !== undefined
+          ? `${parentKey}/a/${owner}/role/${node.agent.name}`
+          : `${parentKey}/role/${node.agent.name}`;
       const row = roles.get(key);
       if (!row) {
         const first: AgentNode = { ...node, key, group: [node.agent], children: [...node.children] };
@@ -507,7 +515,7 @@ export function agentTree(deviceId: string, session: SessionSummary, stale: bool
     for (const row of roles.values()) row.group!.sort((a, b) => a.id - b.id);
     return out;
   };
-  return group(roots, sessionKey(deviceId, session.id));
+  return group(roots, sessionKey(deviceId, session.id), true);
 }
 
 /** A session row with its agents nested under it; the key is the same wherever the session shows. */

@@ -42,7 +42,7 @@ import {
 import { lastAssistantText, messageText, toMarkdown, toTranscript } from "../../anth-sdk/src/transcript.js";
 import { ApiFault, invalid, notFound } from "./errors.js";
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, readdir, realpath, rename as renamePath, stat } from "node:fs/promises";
+import { mkdir, readdir, realpath, rename as renamePath, rm, stat } from "node:fs/promises";
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { homedir, hostname, platform } from "node:os";
@@ -508,6 +508,9 @@ export class Store {
     await this.openAgent(row, true, body.thinkingLevel ?? "low");
     this.catalog.exec("BEGIN");
     try {
+      // Checked again next to the insert: the project may have been removed while the agent opened. Both run
+      // synchronously, so removeProject cannot land between them.
+      if (row.project) this.project(...(row.project.split("/") as [string, string]));
       this.catalog
         .prepare(
           "INSERT INTO sessions(id,name,cwd,dbPath,createdAt,model,provider,project,env) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -517,6 +520,9 @@ export class Store {
       this.catalog.exec("COMMIT");
     } catch (e) {
       this.catalog.exec("ROLLBACK");
+      // The session never existed: close the agent opened for it and drop its new, empty folder.
+      await this.closeHarness(id, false).catch(() => {});
+      await rm(dirname(row.dbPath), { recursive: true, force: true }).catch(() => {});
       throw e;
     }
     if (withTeam) await this.setTeam(row, { enabled: true });
@@ -681,6 +687,17 @@ export class Store {
    */
   async removeProject(client: string, slug: string) {
     const ref = `${client}/${slug}`;
+    // Not on this device: nothing to do, and its client (which may have been created on its own) stays.
+    if (!this.catalog.prepare("SELECT 1 FROM projects WHERE client=? AND slug=?").get(client, slug))
+      return { removed: ref, archivedSessions: [] as string[] };
+    // Incident agents work in the watch session, which need not be one of the project's: stop them first.
+    for (const incident of this.watcher.openIncidents(ref)) {
+      if (incident.conversationId === undefined) continue;
+      const c = await this.opened
+        .get(incident.sessionId)
+        ?.harness.conversation(incident.conversationId as ConversationId, ctx);
+      if (c) await c.abort(ctx, { background: true }).catch(() => {});
+    }
     const archived: string[] = [];
     for (const row of this.list().filter((r) => r.project === ref)) {
       await this.archive(row);
@@ -716,22 +733,27 @@ export class Store {
     return { project, env: (env as EnvironmentName | undefined) ?? "dev" };
   }
 
-  /** Stop all work, close the harness and move its files to archive/. Nothing is deleted. */
-  async archive(row: SessionRow) {
-    const opened = this.opened.get(row.id);
-    if (opened) {
+  /** Close a session's harness and release its lock; with `stop`, abort every conversation's work first. */
+  private async closeHarness(id: string, stop: boolean) {
+    const opened = this.opened.get(id);
+    if (!opened) return;
+    if (stop)
       for (const record of await this.scanAll(opened.harness)) {
         const c = await opened.harness.conversation(record.id, ctx);
         if (c) await c.abort(ctx, { background: true }).catch(() => {});
       }
-      opened.unsubscribe();
-      try {
-        await opened.harness.close(ctx);
-      } finally {
-        opened.unlock();
-      }
-      this.opened.delete(row.id);
+    opened.unsubscribe();
+    try {
+      await opened.harness.close(ctx);
+    } finally {
+      opened.unlock();
     }
+    this.opened.delete(id);
+  }
+
+  /** Stop all work, close the harness and move its files to archive/. Nothing is deleted. */
+  async archive(row: SessionRow) {
+    await this.closeHarness(row.id, true);
     await mkdir(this.archiveDir, { recursive: true });
     const target = join(this.archiveDir, `${row.id}-${Date.now()}`);
     try {

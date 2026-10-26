@@ -320,6 +320,14 @@ export class Watcher {
     return rows.map(toIncident);
   }
 
+  /** A project's incidents that are not resolved yet, oldest first. */
+  openIncidents(project: string): Incident[] {
+    const rows = this.host.db
+      .prepare("SELECT * FROM incidents WHERE project=? AND status!='resolved' ORDER BY id")
+      .all(project) as Record<string, unknown>[];
+    return rows.map(toIncident);
+  }
+
   /** One incident by id. */
   incident(id: number): Incident | undefined {
     const r = this.host.db.prepare("SELECT * FROM incidents WHERE id=?").get(id) as Record<string, unknown> | undefined;

@@ -241,6 +241,19 @@ test("watch and fix: Vercel errors open one incident, its agent proves the fix, 
     );
     await client.watchTick("acme", "site");
     assert.equal((await client.incidents("acme", "site")).length, before);
+
+    // Removing the project while the watch session sits outside it: the session stays, the watch stops and the
+    // open incidents close (their agents are stopped).
+    assert.ok((await client.incidents("acme", "site")).some((i) => i.status !== "resolved"), "an incident is still open");
+    await client.session(s.id).update({ project: null });
+    const removed = await client.removeProject("acme", "site");
+    assert.deepEqual(removed.archivedSessions, []);
+    assert.ok((await client.sessions()).some((x) => x.id === s.id), "the watch session stays");
+    assert.ok((await client.incidents("acme", "site")).every((i) => i.status === "resolved"));
+    await assert.rejects(() => client.watch("acme", "site"));
+    for (const i of await client.incidents("acme", "site"))
+      if (i.conversationId !== undefined)
+        assert.equal((await client.session(s.id).get()).agents.find((a) => a.id === i.conversationId)?.busy ?? false, false);
   } finally {
     await server.stop();
     site.close();

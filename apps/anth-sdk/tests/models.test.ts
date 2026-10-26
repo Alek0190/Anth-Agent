@@ -203,6 +203,7 @@ test("session lineage and network tree nest forks and subagents", () => {
 });
 
 test("team members of one role under one row share a row that opens the newest", () => {
+  /** A named team member of `ownerAgentId`, as the device lists it. */
   const member = (id: number, name: string, ownerAgentId = 1, busy = false): AgentSummary => ({
     id, name, named: true, kind: "subagent", ownerAgentId, ownerTaskId: id * 10, busy, background: 0,
   });
@@ -217,6 +218,7 @@ test("team members of one role under one row share a row that opens the newest",
     member(13, "Tester", 12),
     member(14, "Backend developer", 99),
     member(15, "Backend developer", 99),
+    member(16, "Backend developer", 98),
   ];
   const device: NetworkDevice = {
     id: "box", name: "Box", kind: "ssh", url: "http://box:4780", source: "config", hasToken: true, status: "online",
@@ -224,7 +226,7 @@ test("team members of one role under one row share a row that opens the newest",
   };
   const rows = networkTree([device])[0].children[0].children;
   type Row = Extract<(typeof rows)[number], { type: "agent" }>;
-  const [main, orphans] = rows as Row[];
+  const [main, orphans, otherOrphan] = rows as Row[];
   // Unnamed subagents stay single; the three Backend developers become one row in the newest one's place.
   assert.deepEqual(main.children.map((n) => (n as Row).agent.name), ["Reviewer", "Subagent #9", "Backend developer"]);
   const backend = main.children[2] as Row;
@@ -237,9 +239,12 @@ test("team members of one role under one row share a row that opens the newest",
   assert.deepEqual((main.children[0] as Row).group!.map((a) => a.id), [6], "a role with one member is still keyed by role");
   assert.equal((main.children[0] as Row).key, "box/s/s1/a/1/role/Reviewer");
   assert.equal((main.children[1] as Row).group, undefined, "an unnamed subagent is no team member");
-  // Members whose owner is gone still group among themselves.
+  // Members whose owner is gone still group among themselves, apart from another missing owner's.
   assert.deepEqual(orphans.group!.map((a) => a.id), [14, 15]);
-  assert.equal(orphans.key, "box/s/s1/role/Backend developer");
+  assert.deepEqual(otherOrphan.group!.map((a) => a.id), [16]);
+  assert.equal(rows.length, 3);
+  assert.equal(orphans.key, "box/s/s1/a/99/role/Backend developer");
+  assert.equal(otherOrphan.key, "box/s/s1/a/98/role/Backend developer");
   assert.deepEqual(roleMembers(agents, 8).map((a) => a.id), [5, 8, 12]);
   assert.deepEqual(roleMembers(agents, 13).map((a) => a.id), [11, 13]);
   assert.deepEqual(roleMembers(agents, 1).map((a) => a.id), [1]);

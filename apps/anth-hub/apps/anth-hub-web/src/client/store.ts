@@ -85,9 +85,11 @@ export function select(target: AgentTarget | undefined) {
   reveal();
 }
 
-// Expand the selected agent's device, session and ancestors once it shows up in the tree (a new
-// fork or agent appears a moment after the call that created it).
 let pendingReveal = false;
+/**
+ * Expand the selected agent's device, session and ancestors once it shows up in the tree (a new fork or agent appears
+ * a moment after the call that created it).
+ */
 function reveal() {
   const t = selected.value;
   if (!pendingReveal || !t) return;

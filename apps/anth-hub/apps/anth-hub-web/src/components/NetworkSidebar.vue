@@ -63,6 +63,7 @@ const isSelected = (node: TreeNode) =>
   selected.value.sessionId === node.sessionId &&
   (node.group ?? [node.agent]).some((a) => a.id === selected.value!.agentId);
 
+/** Click or Enter on a row: open an agent or a session's root, expand anything else. */
 function activate(node: TreeNode) {
   focusKey.value = node.key;
   if (
@@ -79,6 +80,7 @@ function activate(node: TreeNode) {
   if (root) select({ deviceId: node.deviceId, sessionId: node.session.id, agentId: root.id });
 }
 
+/** A row's action button: new project, session or agent, check, assign, rename, archive or remove. */
 async function action(node: TreeNode, name: string) {
   if (node.type === "client") {
     if (name === "new-project") ui.dialog = { kind: "new-project", client: node.client.slug };

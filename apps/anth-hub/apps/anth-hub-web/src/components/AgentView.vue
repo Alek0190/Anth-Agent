@@ -100,6 +100,7 @@ function openWorkspace() {
   if (root) choose(root.id);
 }
 
+/** Open another agent of this session. */
 function choose(id: number) {
   picker.value = false;
   if (selected.value) select({ ...selected.value, agentId: id });

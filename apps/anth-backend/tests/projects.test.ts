@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readdirSync } from "node:fs";
 import { AnthClient } from "../../anth-sdk/src/client.js";
 import { AnthError } from "../../anth-sdk/src/errors.js";
 import { bootServer, faux, newToken, tempStore } from "./helpers.js";
@@ -92,6 +93,11 @@ test("clients, projects and environments: upsert, placement, moves, tree, restar
     assert.deepEqual(left.sessions.map((s) => s.id), [loose.id]);
     await assert.rejects(() => client.project("dental-co", "booking-site"), code("not_found"));
     assert.deepEqual(await client.removeProject("dental-co", "booking-site"), { removed: "dental-co/booking-site", archivedSessions: [] }, "again is a no-op");
+    // A missing project leaves its client alone, even a client with no projects.
+    await client.putClient("solo", { name: "Solo" });
+    assert.deepEqual((await client.removeProject("solo", "nope")).archivedSessions, []);
+    assert.ok((await client.clients()).some((c) => c.slug === "solo"), "the empty client stays");
+
   } finally {
     await server.stop();
     await t.cleanup();
@@ -122,6 +128,32 @@ test("a catalog from before projects gains the new columns and keeps its session
     assert.equal((await client.session(old.id).update({ project: "acme/site", env: "prod" })).env, "prod");
   } finally {
     await server.stop();
+    await t.cleanup();
+  }
+});
+
+test("a project removed while a session for it is being created: the session is refused, nothing is left behind", async () => {
+  const t = await tempStore();
+  const store = await t.open();
+  try {
+    store.upsertProject("race-co", "site", { name: "Site" });
+    // Remove the project at the worst moment: after the placement check, while the new session's agent opens.
+    const open = store.openAgent.bind(store);
+    /** Open the agent as usual, then remove its project before create goes on. */
+    store.openAgent = async (...args: Parameters<typeof open>) => {
+      const h = await open(...args);
+      await store.removeProject("race-co", "site");
+      return h;
+    };
+    await assert.rejects(
+      () => store.create({ name: "Racing", cwd: t.work, model: faux, project: "race-co/site" }),
+      (e: AnthError) => e.code === "not_found",
+    );
+    assert.deepEqual(store.list(), [], "no session points at the removed project");
+    assert.equal(store.opened.size, 0, "the agent opened for it is closed");
+    assert.deepEqual(readdirSync(join(t.options.dataDir, "sessions")), [], "its new folder is gone");
+  } finally {
+    await store.close();
     await t.cleanup();
   }
 });
