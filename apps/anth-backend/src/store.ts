@@ -50,7 +50,7 @@ import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT as ctx, withAbortSignal } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
-import { curatedModels, defaultModelId, newerModels } from "./model-catalog.js";
+import { curatedModels, defaultModelId, missingCurated, withNewerModels } from "./model-catalog.js";
 import { fauxModels, installFaux } from "./faux.js";
 import {
   Harness,
@@ -223,14 +223,9 @@ export class Store {
     if (options.provider === "faux") installFaux(this.models);
     else {
       const provider = openrouterProvider();
-      const catalog = [...provider.getModels()];
-      for (const extra of newerModels) {
-        const base = catalog.find((m) => m.id === extra.like);
-        if (base && !catalog.some((m) => m.id === extra.id))
-          catalog.push({ ...base, id: extra.id, name: extra.name, cost: { ...extra.cost }, maxTokens: extra.maxTokens });
-      }
-      for (const model of curatedModels)
-        if (!catalog.some((m) => m.id === model.id)) throw Error(`OpenRouter catalog missing ${model.id}`);
+      const catalog = withNewerModels(provider.getModels());
+      const missing = missingCurated(catalog);
+      if (missing.length) throw Error(`OpenRouter catalog missing ${missing.join(", ")}`);
       this.models.setProvider({
         ...provider,
         getModels: () => catalog.filter((m) => curatedModels.some((c) => c.id === m.id)),
