@@ -23,7 +23,7 @@ const info = shallowRef<WatchInfo | null>();
 const events = shallowRef<WatchEvent[]>([]);
 const incidents = shallowRef<Incident[]>([]);
 const busy = ref(false);
-const blank = () => ({ url: "", paths: "/", path: ".", vercel: true });
+const blank = () => ({ url: "", paths: "/", path: ".", vercel: true, serverLogs: false });
 const form = ref(blank());
 
 /** Forget everything shown for another project, so its incidents or URL never appear under this one. */
@@ -70,6 +70,7 @@ async function load() {
         paths: info.value.paths.join(", "),
         path: info.value.path,
         vercel: info.value.vercel,
+        serverLogs: info.value.serverLogs,
       };
     filled = key;
     const [e, i] = await Promise.allSettled([client.watchEvents(c, p, 40), client.incidents(c, p)]);
@@ -103,7 +104,8 @@ async function save(enabled = true) {
         url: form.value.url.trim(),
         paths: paths.length ? paths : ["/"],
         path: form.value.path.trim() || ".",
-        vercel: form.value.vercel,
+        // A new watch reads the logs of wherever anth.json says the project ships; after that, the switches decide.
+        ...(info.value ? { vercel: form.value.vercel, serverLogs: form.value.serverLogs } : {}),
         enabled,
       }),
     );
@@ -199,10 +201,20 @@ const time = (at: number) =>
             placeholder="."
             aria-label="Repository folder"
         /></label>
-        <label class="check"
-          ><input v-model="form.vercel" type="checkbox" aria-label="Read Vercel logs" />Read Vercel
-          logs (needs VERCEL_TOKEN)</label
-        >
+        <template v-if="info">
+          <label class="check"
+            ><input v-model="form.serverLogs" type="checkbox" aria-label="Read server logs" />Read
+            server logs (an app server in anth.json; emails, IPs and tokens removed)</label
+          >
+          <label class="check"
+            ><input v-model="form.vercel" type="checkbox" aria-label="Read Vercel logs" />Read
+            Vercel logs (needs VERCEL_TOKEN)</label
+          >
+        </template>
+        <p v-else class="hint">
+          Logs are read from where the project ships: its app server or Vercel, as its anth.json
+          says.
+        </p>
         <div class="watch-actions">
           <button class="primary" :disabled="busy || !form.url.trim()">
             {{ info ? "Save" : "Start watching" }}

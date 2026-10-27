@@ -753,12 +753,23 @@ try {
   // Watch and fix: watch the project from the Watch tab, then three webhook events with one cause open an incident.
   await tab("Watch");
   await page.getByLabel("Production URL").fill(base);
-  await page.getByLabel("Read Vercel logs").uncheck();
+  // A new watch picks its log source from anth.json; the switches appear once it runs.
+  await expect(page.getByLabel("Read Vercel logs")).toHaveCount(0);
+  await expect(page.locator(".watch-form")).toContainText(
+    "Logs are read from where the project ships",
+  );
   await page.getByRole("button", { name: "Start watching", exact: true }).click();
   await expect(page.locator(".watch-form")).toContainText("Watching", { timeout: 10000 });
+  // No anth.json app server here: Vercel logs on by default, server logs off. Turn Vercel off (no token here).
+  await expect(page.getByLabel("Read server logs")).not.toBeChecked();
+  await page.getByLabel("Read Vercel logs").uncheck();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByRole("button", { name: "Check now" }).click();
   await expect(
-    page.locator(".toast, [role=status]").filter({ hasText: "Checked" }).first(),
+    page
+      .locator(".toast, [role=status]")
+      .filter({ hasText: /Checked: \d+ new event/ })
+      .first(),
   ).toBeVisible({ timeout: 15000 });
   await expect(row("c/dental-co/p/booking-site").locator(".watching")).toBeVisible();
   const webhook = (await page.locator(".webhook").textContent())?.trim();

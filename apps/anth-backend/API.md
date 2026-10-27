@@ -69,13 +69,13 @@ One device watches a project's production. Every minute (`ANTH_WATCH_INTERVAL_MS
 
 | Route | Body / query | Returns |
 |---|---|---|
-| `GET / PUT / DELETE /v1/projects/:client/:project/watch` | PUT `{sessionId, url, path?, paths?, vercel?, enabled?}` | `WatchInfo`: the session that holds the repository (`path` is the repository folder relative to it), the production `url`, the `paths` checked every tick, whether `vercel logs` is read (needs `VERCEL_TOKEN`), and `webhookPath` |
+| `GET / PUT / DELETE /v1/projects/:client/:project/watch` | PUT `{sessionId, url, path?, paths?, vercel?, serverLogs?, enabled?}` | `WatchInfo`: the session that holds the repository (`path` is the repository folder relative to it), the production `url`, the `paths` checked every tick, whether `vercel logs` is read (needs `VERCEL_TOKEN`), whether the app server's logs are read (`serverLogs`: needs `anth.json` `deploy.target` `"server"` and `ANTH_DEPLOY_SSH_KEY`), and `webhookPath`. A new watch reads the logs of wherever `anth.json` says the project ships: `serverLogs` on and `vercel` off for an app server, the other way round otherwise |
 | `POST /v1/projects/:client/:project/watch/tick` | | `{events, errors}`: collect, judge and apply the rule now |
 | `GET /v1/projects/:client/:project/watch/events` | `?limit=` | newest `WatchEvent`s with verdict, impact and incident |
 | `GET /v1/projects/:client/:project/incidents`, `GET /v1/incidents` | | `Incident[]`: status `fixing`, `shipping`, `resolved` or `needs-you`, worktree, branch, agent, ship run |
 | `POST /hooks/:client/:project/:secret` | any JSON object or array (Sentry webhooks, `{message, level, path, status}`) | `202 {accepted, new}`; no bearer token, the secret in `webhookPath` is the key; a wrong secret is `404` |
 
-Sources: `vercel-log` and `vercel-request` (`vercel logs runtime --query 'level:error OR level:fatal'` and `vercel logs requests --query 'httpStatus >= 500'` for production, since the last tick), `uptime` (each path: down, 5xx or slower than 8 s), and `webhook`. The project tree's `projects[].watch` reports `{enabled, openIncidents}` for badges.
+Sources: `vercel-log` and `vercel-request` (`vercel logs runtime --query 'level:error OR level:fatal'` and `vercel logs requests --query 'httpStatus >= 500'` for production, since the last tick), `server-log` (`anth-deploy logs <app> <since>` over the deploy key: the production container's lines since the last tick; error and warning lines become events, with a stack trace or error object that follows folded into its line, JSON (pino) levels read, at most 300 per tick, and emails, IP addresses, query strings, credentials and long tokens replaced before storing; the reads overlap by five seconds and a line keeps its id, so nothing is recorded twice), `uptime` (each path: down, 5xx or slower than 8 s), and `webhook`. The project tree's `projects[].watch` reports `{enabled, openIncidents}` for badges.
 
 ## Agent tools
 

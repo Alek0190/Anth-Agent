@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { join } from "node:path";
 import { AnthClient } from "../../anth-sdk/src/client.js";
 import type { JobRun, JobRunsDoc } from "../../anth-sdk/src/jobs.js";
-import { fingerprint, judgeOffline, vercelEvent, webhookEvent } from "../src/watch.js";
+import { fingerprint, judgeOffline, MAX_SERVER_EVENTS, redact, serverLogEvents, serverLogsError, vercelEvent, webhookEvent } from "../src/watch.js";
 import { bootServer, faux, newToken, tempStore, until } from "./helpers.js";
 
 test("watch helpers: Vercel log lines, webhook bodies, fingerprints, offline rules", () => {
@@ -30,6 +30,51 @@ test("watch helpers: Vercel log lines, webhook bodies, fingerprints, offline rul
   assert.equal(judgeOffline({ id: "x", source: "uptime", at: 0, level: "error", message: "down", fingerprint: "f" }).verdict, "incident");
   assert.equal(judgeOffline({ id: "x", source: "uptime", at: 0, level: "warning", message: "slow", fingerprint: "f" }).verdict, "suspicious");
   assert.equal(judgeOffline({ id: "x", source: "vercel-log", at: 0, level: "info", message: "ok", fingerprint: "f" }).verdict, "normal");
+});
+
+test("server logs: error lines with their stack traces become events, routine lines do not, nothing private is kept", () => {
+  const out = [
+    "Warning: Permanently added '203.0.113.7' (ED25519) to the list of known hosts.", // ssh chatter: no timestamp
+    "2026-10-27T14:00:00.100000000Z Server listening on port 3000",
+    "2026-10-27T14:00:01.200000000Z [auth] login-failed reason=password email=3f2a9c1b7d4e ip=198.51.100.23",
+    "2026-10-27T14:00:02.300000000Z TypeError: Cannot read properties of undefined (reading 'items')",
+    "2026-10-27T14:00:02.300000000Z     at addSubmission (/app/server/sitesRoutes.js:44:18)",
+    "2026-10-27T14:00:02.300000000Z     at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)",
+    "2026-10-27T14:00:03.400000000Z POST /api/public/sites/cafe/submissions?token=abc123 500 12ms",
+    '2026-10-27T14:00:04.500000000Z {"level":50,"msg":"payment webhook failed","err":{"message":"boom","stack":"Error: boom\\n    at pay (/app/pay.js:1:1)"},"req":{"url":"/api/pay?session=xyz"}}',
+    '2026-10-27T14:00:05.600000000Z {"level":30,"msg":"request done","res":{"statusCode":200}}',
+    "2026-10-27T14:00:06.700000000Z Error: connect ECONNREFUSED 10.0.0.5:5432 for user alex@example.com password=hunter2 Bearer eyJhbGciOiJIUzI1NiJ9abcdef1234567890xyz",
+  ].join("\n");
+  const events = serverLogEvents(out);
+  assert.deepEqual(events.map((e) => e.level), ["warning", "error", "error", "error", "error"]);
+  assert.ok(events.every((e) => e.source === "server-log" && e.id.startsWith("server:")));
+  const [failed, crash, http, json, db] = events;
+  // Routine lines (listening, an info JSON line) and ssh chatter are not events; the warning keeps its shape, not the IP.
+  assert.match(failed.message, /login-failed reason=password email=3f2a9c1b7d4e ip=<ip>/);
+  // The stack trace stays with its error, as one event.
+  assert.match(crash.message, /^TypeError: Cannot read properties of undefined \(reading 'items'\)\n {4}at addSubmission \(\/app\/server\/sitesRoutes\.js:44:18\)\n/);
+  assert.equal(crash.at, Date.parse("2026-10-27T14:00:02.300Z"));
+  // A request line gives the path and status, without its query string.
+  assert.deepEqual([http.path, http.status], ["/api/public/sites/cafe/submissions?<query>", 500]);
+  assert.doesNotMatch(http.message, /abc123/);
+  // pino JSON: the level number, the message, the error's stack and the request path.
+  assert.match(json.message, /^payment webhook failed\nError: boom\n {4}at pay/);
+  assert.equal(json.path, "/api/pay?<query>");
+  // No email, IP, password or token survives.
+  assert.equal(db.message, "Error: connect ECONNREFUSED <ip>:5432 for user <email> password=<redacted> Bearer <redacted>");
+  // The same line read again (the ticks overlap) has the same id; one cause, one fingerprint.
+  assert.deepEqual(serverLogEvents(out).map((e) => e.id), events.map((e) => e.id));
+  const again = serverLogEvents("2026-10-27T15:00:00.000000000Z TypeError: Cannot read properties of undefined (reading 'items')")[0];
+  assert.equal(fingerprint(again), fingerprint(crash));
+  assert.equal(judgeOffline({ ...crash, fingerprint: "f" }).verdict, "incident");
+  // A flood is capped.
+  const flood = Array.from({ length: 500 }, (_, i) => `2026-10-27T14:00:00.${String(i).padStart(9, "0")}Z Error: x ${i}`).join("\n");
+  assert.equal(serverLogEvents(flood).length, MAX_SERVER_EVENTS);
+  // Times, versions and paths are not mistaken for secrets.
+  assert.equal(redact("at 12:30:45 node v24.1.0 /app/node_modules/express/lib/router/index.js"), "at 12:30:45 node v24.1.0 /app/node_modules/express/lib/router/index.js");
+  // Failures say what to do.
+  assert.match(serverLogsError("anth-deploy: usage: preview <app> <sha> | promote <app> <sha> | rollback <app> | status <app> | refresh <app>", "203.0.113.7"), /just server update root@203\.0\.113\.7/);
+  assert.match(serverLogsError("anth@203.0.113.7: Permission denied (publickey).", "203.0.113.7"), /refused the deploy key/);
 });
 
 /** Read a request body as JSON. */
