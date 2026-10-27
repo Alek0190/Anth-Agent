@@ -87,10 +87,28 @@ export const curatedModels = [
     icon: "zai.png",
   },
   {
+    id: "moonshotai/kimi-k3.1-pro",
+    name: "Kimi K3.1 Pro",
+    tier: "A",
+    icon: "kimi.png",
+  },
+  {
     id: "moonshotai/kimi-k3",
     name: "Kimi K3",
     tier: "A",
     icon: "kimi.png",
+  },
+  {
+    id: "openai/gpt-6.1-terra-pro",
+    name: "GPT-6.1 Terra Pro",
+    tier: "A",
+    icon: "openai.png",
+  },
+  {
+    id: "openai/gpt-6.1-terra",
+    name: "GPT-6.1 Terra",
+    tier: "A",
+    icon: "openai.png",
   },
   {
     id: "openai/gpt-5.6-terra",
@@ -159,6 +177,12 @@ export const curatedModels = [
     icon: "zai.png",
   },
   {
+    id: "minimax/minimax-m3.1-flash",
+    name: "MiniMax-M3.1-Flash",
+    tier: "A",
+    icon: "minimax.png",
+  },
+  {
     id: "z-ai/glm-5.3-flash",
     name: "GLM-5.3-Flash",
     tier: "B",
@@ -187,8 +211,10 @@ export const defaultModelId = "anthropic/claude-sonnet-5.5";
 
 /**
  * Curated models newer than the OpenRouter snapshot bundled with pi-ai. Each copies the API settings of a model the
- * snapshot lists (`like`) and sets what differs; values from pi-ai 1.4.0's OpenRouter snapshot (2026-10-21). Drop an
- * entry once the bundled snapshot lists the model itself.
+ * snapshot lists (`like`) and sets what differs. DeepSeek V4.1 Flash 1017: pi-ai's OpenRouter snapshot (2026-10-21).
+ * GPT-6.1 Terra and Terra Pro, Kimi K3.1 Pro, MiniMax M3.1 Flash: openrouter.ai model pages, 2026-10-27; their output
+ * limits are not published yet, so they keep the `like` model's. Drop an entry once the bundled snapshot lists the
+ * model itself.
  */
 export const newerModels = [
   {
@@ -196,6 +222,65 @@ export const newerModels = [
     like: "deepseek/deepseek-v4.1-flash",
     name: "DeepSeek: DeepSeek V4.1 Flash 1017",
     cost: { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0 },
+    contextWindow: 1048576,
     maxTokens: 393216,
   },
+  {
+    id: "openai/gpt-6.1-terra-pro",
+    like: "openai/gpt-5.6-terra-pro",
+    name: "OpenAI: GPT-6.1 Terra Pro",
+    cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 0 },
+    contextWindow: 1050000,
+    maxTokens: 128000,
+  },
+  {
+    id: "openai/gpt-6.1-terra",
+    like: "openai/gpt-5.6-terra",
+    name: "OpenAI: GPT-6.1 Terra",
+    cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 0 },
+    contextWindow: 1050000,
+    maxTokens: 128000,
+  },
+  {
+    id: "moonshotai/kimi-k3.1-pro",
+    like: "moonshotai/kimi-k3",
+    name: "MoonshotAI: Kimi K3.1 Pro",
+    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
+    contextWindow: 1048576,
+    maxTokens: 131072,
+  },
+  {
+    id: "minimax/minimax-m3.1-flash",
+    like: "minimax/minimax-m3",
+    name: "MiniMax: MiniMax M3.1 Flash",
+    cost: { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 },
+    contextWindow: 1000000,
+    maxTokens: 512000,
+  },
 ] as const;
+
+type CatalogModel = {
+  id: string;
+  name: string;
+  contextWindow: number;
+  maxTokens: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+};
+
+/**
+ * The OpenRouter catalog with the newer curated models added, each copied from its `like` model with its own name,
+ * prices and limits. A model the catalog already lists is left as the catalog has it.
+ */
+export function withNewerModels<T extends CatalogModel>(catalog: readonly T[]): T[] {
+  const out = [...catalog];
+  for (const extra of newerModels) {
+    const base = out.find((m) => m.id === extra.like);
+    if (base && !out.some((m) => m.id === extra.id))
+      out.push({ ...base, id: extra.id, name: extra.name, cost: { ...extra.cost }, contextWindow: extra.contextWindow, maxTokens: extra.maxTokens });
+  }
+  return out;
+}
+
+/** Curated model ids the catalog cannot serve (the backend refuses to start with any). */
+export const missingCurated = (catalog: readonly { id: string }[]) =>
+  curatedModels.filter((c) => !catalog.some((m) => m.id === c.id)).map((c) => c.id);
