@@ -23,6 +23,17 @@ keygen NAME="anth_deploy":
     @printf '\nANTH_DEPLOY_SSH_KEY=%s\n' "$(base64 < ~/.anth/$1 | tr -d '\n')" >> .env
     @echo "Added ANTH_DEPLOY_SSH_KEY to .env (the private key, base64). Add ANTH_DEPLOY_SSH_KEY to env_keys in anth-network.yaml, then just net up <device>."
 
+# Install the latest anth-deploy on a server (after pulling Anth-Agent: new commands such as logs need it)
+[no-cd]
+update HOST:
+    scp -q deploy/anth-deploy.sh "$1:/tmp/anth-deploy"
+    ssh "$1" 'install -m 0755 /tmp/anth-deploy /usr/local/bin/anth-deploy && rm -f /tmp/anth-deploy && echo "anth-deploy updated"'
+
+# Production's log lines from the last N minutes, using the deploy key (what the watch reads)
+[no-cd]
+logs HOST APP MINUTES="10":
+    ssh -i ~/.anth/anth_deploy "anth@$1" logs "$2" "$(( $(date +%s) - $3 * 60 ))"
+
 # What production and the previous release are on a server, using the deploy key
 [no-cd]
 status HOST APP:

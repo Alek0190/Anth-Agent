@@ -3,6 +3,8 @@
 // Code owns the sources, the thresholds and the side effects; Jev owns one bounded judgment per event. Sources, every
 // tick (one minute by default):
 //   vercel-log, vercel-request  `vercel logs` for production runtime errors and 5xx requests, since the last tick
+//   server-log                  `anth-deploy logs` over the deploy key, for projects that ship to an app server (anth.json
+//                               deploy.target "server"): the app's own error and warning lines, redacted
 //   uptime                      GET the production URL and each watched path
 //   webhook                     events POSTed by other services to /hooks/<client>/<project>/<secret>, any time
 //
@@ -21,8 +23,9 @@ import type {
 } from "../../anth-sdk/src/api.js";
 import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
 import { runEffect } from "./jobs.js";
-import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative as relativePath, resolve as resolvePath, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative as relativePath, resolve as resolvePath, sep } from "node:path";
+import { parseTarget, serverSecrets, sshCommand, type DeployTarget } from "./ship.js";
 import { invalid, notFound } from "./errors.js";
 
 export const WINDOW_MS = 10 * 60_000;
@@ -59,6 +62,7 @@ type WatchRow = {
   url: string;
   paths: string;
   vercel: number;
+  serverlogs: number;
   secret: string;
   enabled: number;
   cursor: string | null;
@@ -166,6 +170,126 @@ export function webhookEvent(body: Record<string, unknown>, at = Date.now()): Om
   };
 }
 
+/**
+ * Strip what a log line must not carry into the watch's store, Jev or an incident agent: email addresses, IP addresses,
+ * query strings, credentials after a key word, and long opaque tokens. Shapes stay, so fingerprints still group.
+ */
+export function redact(text: string) {
+  return text
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "<email>")
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<ip>")
+    .replace(/(?<![\w:])(?:[0-9a-f]{1,4}:){2,7}(?::|[0-9a-f]{1,4})\b/gi, (m) => (/[a-f]/i.test(m) || m.includes("::") ? "<ip>" : m))
+    .replace(/((?:https?:\/\/[^\s?#"']+)|(?:^|(?<=[\s"'(]))\/[^\s?#"']*)\?[^\s#"')]*/g, "$1?<query>")
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 <redacted>")
+    .replace(
+      /\b(authorization|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password|passwd|pwd|cookie|sid|session(?:id)?)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;)}]+)/gi,
+      "$1$2<redacted>",
+    )
+    .replace(/\b[A-Za-z0-9_+-]{32,}={0,2}/g, (m) => (/\d/.test(m) && /[A-Za-z]/.test(m) ? "<redacted>" : m));
+}
+
+const LOG_LINE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) ?(.*)$/;
+// "error" and error names (TypeError, ReferenceError, SequelizeDatabaseError), exceptions, crashes and system errors.
+const ERROR_WORDS = /\b(\w*error|\w*exception|fatal|unhandled|uncaught|panic|traceback|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOSPC|EADDRINUSE|out of memory)\b/i;
+const WARN_WORDS = /\b(warn(?:ing)?|failed|denied|timed out|timeout|deprecated)\b/i;
+// At most a dozen words between the path and the status, so a long line cannot make the match slow.
+const HTTP_LINE = /\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\/\S*)(?:\s+\S+){0,12}?\s+([1-5]\d\d)\b/;
+/** pino's numeric levels, the common JSON logger in Node apps. */
+const PINO_LEVELS: Record<number, string> = { 40: "warning", 50: "error", 60: "fatal" };
+/** The most server log events one tick records; a flood is one incident anyway. */
+export const MAX_SERVER_EVENTS = 300;
+
+/** The level, message, path and status of one log line's text; level is undefined for a routine line. */
+function readLogText(text: string): { level?: string; message: string; path?: string; status?: number } {
+  if (text.startsWith("{")) {
+    try {
+      const j = JSON.parse(text) as Record<string, unknown>;
+      const req = (j.req ?? {}) as Record<string, unknown>;
+      const res = (j.res ?? {}) as Record<string, unknown>;
+      const status = num(j.status ?? j.statusCode ?? res.statusCode);
+      const raw = j.level;
+      const named = typeof raw === "number" ? PINO_LEVELS[raw] : str(raw)?.toLowerCase();
+      const level = named && /^(warn|warning|error|fatal|critical)$/.test(named) ? (named === "warn" ? "warning" : named) : status !== undefined && status >= 500 ? "error" : undefined;
+      const err = (j.err ?? j.error ?? {}) as Record<string, unknown>;
+      const message = str(j.msg) ?? str(j.message) ?? str(err.message) ?? text;
+      const stack = str(err.stack);
+      const path = str(req.url) ?? str(j.path) ?? str(j.url);
+      return { level, message: stack && !message.includes(stack) ? `${message}\n${stack}` : message, ...(path ? { path } : {}), ...(status !== undefined ? { status } : {}) };
+    } catch {
+      // Not JSON after all: read it as text.
+    }
+  }
+  const http = HTTP_LINE.exec(text);
+  const status = http ? Number(http[3]) : undefined;
+  const level =
+    status !== undefined && status >= 500 ? "error" : ERROR_WORDS.test(text) ? "error" : WARN_WORDS.test(text) ? "warning" : undefined;
+  return { level, message: text, ...(http ? { path: http[2] } : {}), ...(status !== undefined ? { status } : {}) };
+}
+
+/**
+ * `anth-deploy logs` output as watch events: one event per error or warning line, with the stack trace or error details
+ * that follow it (indented lines) folded into its message. Routine lines are skipped, everything is redacted, and the
+ * id comes from the line itself, so the overlapping reads of consecutive ticks never record a line twice.
+ */
+export function serverLogEvents(out: string): Omit<WatchEvent, "fingerprint">[] {
+  const events: Omit<WatchEvent, "fingerprint">[] = [];
+  let open: Omit<WatchEvent, "fingerprint"> | undefined;
+  const close = () => {
+    if (!open) return;
+    events.push({ ...open, message: redact(open.message).slice(0, 2000) });
+    open = undefined;
+  };
+  for (const line of out.split("\n")) {
+    const m = LOG_LINE.exec(line.trimEnd());
+    if (!m) continue; // ssh or anth-deploy chatter, never the app's own output
+    const [, ts, text] = m;
+    // An indented line or a closing brace continues the error above it (a stack trace, an error object).
+    if (open && (/^\s/.test(text) || /^[}\])]/.test(text.trim()))) {
+      if (open.message.length < 2000) open.message += `\n${text}`;
+      continue;
+    }
+    close();
+    if (events.length >= MAX_SERVER_EVENTS) break;
+    const read = readLogText(text);
+    if (!read.level) continue;
+    open = {
+      id: `server:${hash(`${ts} ${text}`)}`,
+      source: "server-log",
+      at: time(ts),
+      level: read.level,
+      message: read.message,
+      ...(read.path ? { path: redact(read.path) } : {}),
+      ...(read.status !== undefined ? { status: read.status } : {}),
+    };
+  }
+  close();
+  return events.slice(0, MAX_SERVER_EVENTS);
+}
+
+/** The deploy target in a repository's anth.json, read from disk (undefined without one). */
+export function readDeployTarget(dir: string): DeployTarget | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(join(dir, "anth.json"), "utf8");
+  } catch {
+    return undefined;
+  }
+  try {
+    return parseTarget((JSON.parse(raw) as { deploy?: unknown }).deploy);
+  } catch {
+    return undefined;
+  }
+}
+
+/** One readable line for a failed `anth-deploy logs`, with the fix when we know it. */
+export function serverLogsError(out: string, host: string) {
+  if (/usage: preview/.test(out) && !/logs <app>/.test(out))
+    return `The app server's anth-deploy has no logs command yet: run just server update root@${host} from Anth-Agent`;
+  if (/Permission denied \(publickey/i.test(out)) return `${host} refused the deploy key (run just server setup for this app)`;
+  if (/no production deployment yet/.test(out)) return "Nothing is in production yet, so there are no server logs";
+  return `anth-deploy logs: ${out.trim().split("\n").slice(-2).join(" ").slice(0, 300)}`;
+}
+
 /** A watch_events row as a WatchEvent, without null columns. */
 function toEvent(r: Record<string, unknown>): WatchEvent {
   const e: WatchEvent = { id: r.id as string, source: r.source as WatchSource, at: r.at as number, message: r.message as string, fingerprint: r.fingerprint as string };
@@ -194,6 +318,9 @@ export class Watcher {
       CREATE TABLE IF NOT EXISTS watch_events(id TEXT NOT NULL,project TEXT NOT NULL,source TEXT NOT NULL,at INTEGER NOT NULL,level TEXT,message TEXT NOT NULL,path TEXT,status INTEGER,fingerprint TEXT NOT NULL,verdict TEXT,impact REAL,incident INTEGER,PRIMARY KEY(project,id));
       CREATE INDEX IF NOT EXISTS watch_events_at ON watch_events(project,at);
       CREATE TABLE IF NOT EXISTS incidents(id INTEGER PRIMARY KEY AUTOINCREMENT,project TEXT NOT NULL,fingerprint TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,openedAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,sessionId TEXT NOT NULL,conversationId INTEGER,worktree TEXT,branch TEXT,base TEXT,events INTEGER NOT NULL,shipTaskId INTEGER,note TEXT);`);
+    // Watches from before server logs gain the switch, off.
+    const columns = new Set((host.db.prepare("PRAGMA table_info(watches)").all() as { name: string }[]).map((c) => c.name));
+    if (!columns.has("serverlogs")) host.db.exec("ALTER TABLE watches ADD COLUMN serverlogs INTEGER NOT NULL DEFAULT 0");
   }
 
   /** Tick every `intervalMs`; 0 leaves ticking to `tick()` calls (tests, the Check now button). */
@@ -224,6 +351,7 @@ export class Watcher {
       url: r.url,
       paths: JSON.parse(r.paths) as string[],
       vercel: !!r.vercel,
+      serverLogs: !!r.serverlogs,
       webhookPath: `/hooks/${client}/${slug}/${r.secret}`,
       ...(r.lastTickAt ? { lastTickAt: r.lastTickAt } : {}),
       ...(r.lastError ? { lastError: r.lastError } : {}),
@@ -271,14 +399,19 @@ export class Watcher {
     const path = relativePath(realpathSync(cwd), realpathSync(repo)) || ".";
     if (path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path))
       throw invalid(`The repository folder must be inside the session folder ${cwd}`);
-    const vercel = b.vercel === undefined ? (current ? !!current.vercel : true) : b.vercel === true;
+    // A new watch reads the logs of wherever the project ships: its app server (anth.json deploy.target "server") or Vercel.
+    const onServer = readDeployTarget(repo)?.kind === "server";
+    const vercel = b.vercel === undefined ? (current ? !!current.vercel : !onServer) : b.vercel === true;
+    const serverLogs = b.serverLogs === undefined ? (current ? !!current.serverlogs : onServer) : b.serverLogs === true;
+    if (serverLogs && !onServer)
+      throw invalid(`Server logs need anth.json in ${repo} with "deploy": {"target": "server", "host": …, "app": …}`);
     const enabled = b.enabled === undefined ? (current ? !!current.enabled : true) : b.enabled === true;
     this.host.db
       .prepare(
-        `INSERT INTO watches(project,sessionId,path,url,paths,vercel,secret,enabled,createdAt) VALUES(?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(project) DO UPDATE SET sessionId=excluded.sessionId,path=excluded.path,url=excluded.url,paths=excluded.paths,vercel=excluded.vercel,enabled=excluded.enabled`,
+        `INSERT INTO watches(project,sessionId,path,url,paths,vercel,serverlogs,secret,enabled,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(project) DO UPDATE SET sessionId=excluded.sessionId,path=excluded.path,url=excluded.url,paths=excluded.paths,vercel=excluded.vercel,serverlogs=excluded.serverlogs,enabled=excluded.enabled`,
       )
-      .run(project, sessionId, path, url.replace(/\/+$/, ""), JSON.stringify(paths), vercel ? 1 : 0, current?.secret ?? randomBytes(18).toString("base64url"), enabled ? 1 : 0, Date.now());
+      .run(project, sessionId, path, url.replace(/\/+$/, ""), JSON.stringify(paths), vercel ? 1 : 0, serverLogs ? 1 : 0, current?.secret ?? randomBytes(18).toString("base64url"), enabled ? 1 : 0, Date.now());
     this.host.notify();
     return this.get(project);
   }
@@ -420,11 +553,21 @@ export class Watcher {
         errors.push(String((e as Error).message ?? e));
       }
     }
+    if (r.serverlogs) {
+      try {
+        events.push(...(await this.serverLogs(r)));
+      } catch (e) {
+        errors.push(String((e as Error).message ?? e));
+      }
+    }
     this.record(project, events);
     await this.process(project);
+    // The log sources read from the cursor; it moves only when every one of them read cleanly, so nothing is skipped
+    // (a re-read line keeps its id and is not recorded twice).
+    const logs = r.vercel || r.serverlogs;
     this.host.db
       .prepare("UPDATE watches SET lastTickAt=?,lastError=?,cursor=? WHERE project=?")
-      .run(started, errors.length ? errors.join(" · ").slice(0, 500) : null, r.vercel && !errors.length ? new Date(started).toISOString() : r.cursor, project);
+      .run(started, errors.length ? errors.join(" · ").slice(0, 500) : null, logs && !errors.length ? new Date(started).toISOString() : r.cursor, project);
     this.host.notify();
     return { events: events.length, errors };
   }
@@ -470,6 +613,23 @@ export class Watcher {
       }
     }
     return out;
+  }
+
+  /**
+   * The app's error and warning lines since the last tick, read on its app server with the deploy key. Only `anth-deploy
+   * logs` can run there (a forced command), and the key never reaches an agent.
+   */
+  private async serverLogs(r: WatchRow) {
+    const cwd = this.host.sessionCwd(r.sessionId);
+    if (!cwd) throw Error("The watch session is gone");
+    const dir = r.path === "." ? cwd : `${cwd}/${r.path}`;
+    const target = readDeployTarget(dir);
+    if (target?.kind !== "server") throw Error(`Server logs need anth.json with deploy.target "server" in ${dir}`);
+    // Five seconds of overlap: Docker's --since is per second, and a line read twice keeps its id.
+    const since = Math.floor(Date.parse(r.cursor ?? new Date(Date.now() - 5 * 60_000).toISOString()) / 1000) - 5;
+    const result = await runEffect(sshCommand(target, `logs ${target.app} ${since}`), dir, serverSecrets(), 60);
+    if (result.code !== 0) throw Error(serverLogsError(result.out, target.host));
+    return serverLogEvents(result.out);
   }
 
   /** Judge unjudged events, apply the rule, and follow incidents that are shipping. */

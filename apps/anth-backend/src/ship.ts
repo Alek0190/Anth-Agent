@@ -183,7 +183,7 @@ async function deployTarget(p: Phase, dir: string) {
  * The deploy key for app servers, from ANTH_DEPLOY_SSH_KEY (the private key, base64 or as is). It never touches disk
  * outside the one command that uses it: a 0600 temp file, removed when the command ends.
  */
-function serverSecrets() {
+export function serverSecrets() {
   const raw = env("ANTH_DEPLOY_SSH_KEY");
   if (!raw)
     throw Error(
@@ -196,7 +196,7 @@ function serverSecrets() {
 }
 
 /** A shell command that runs `anth-deploy <args>` on the server with the deploy key. */
-function sshCommand(t: Extract<DeployTarget, { kind: "server" }>, args: string) {
+export function sshCommand(t: Extract<DeployTarget, { kind: "server" }>, args: string) {
   const ssh = env("ANTH_SSH_BIN") ?? "ssh";
   // A subshell, so a pipe into it (git archive | …) feeds ssh, and the key file goes when it ends.
   return (

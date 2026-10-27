@@ -104,7 +104,7 @@ ssh root@APP_IP nano /srv/anth/anthwebbuilder/preview.env  # preview
 
 4. `just net up hetzner`. In the hub, `hetzner` appears online.
 5. On the agent box, set the git author to your Vercel/GitHub email (`ssh root@AGENT_IP git config --global user.email you@example.com`) and clone the project into `~/anth-work`.
-6. In the hub, create a session on `hetzner` in the project, then **Watch** → production URL → **Start watching**.
+6. In the hub, create a session on `hetzner` in the project, then **Watch** → production URL → **Start watching**. Because the project's `anth.json` ships to the app server, the watch reads the app's own log lines there every minute (**Read server logs**), so a crash inside a form or a login opens an incident, not just a page that is down. It reads them with the deploy key, which can only run `anth-deploy logs` (read only), and it removes emails, IP addresses, query strings and tokens before anything is stored or judged.
 7. Block the backend port from the internet: `ssh root@AGENT_IP 'ufw allow 22/tcp && ufw allow in on tailscale0 && ufw enable'`.
 
 ### Webhooks (optional)
@@ -165,4 +165,5 @@ Every preview starts from a fresh copy of production's data folder, so a release
 - **Ship:** ask the Lead, or Tasks → Ship. Preview at `https://preview.anthwebbuilder.com`, a pull request on GitHub, then **Approve production**.
 - **Rollback:** Tasks → Roll back production → approve. Takes seconds: the previous image is still on the server.
 - **Status:** `just server status APP_IP anthwebbuilder`.
-- **Logs:** `ssh root@APP_IP docker logs --tail 100 anth-anthwebbuilder-0` (or `-1`, whichever slot is current).
+- **Logs:** `just server logs APP_IP anthwebbuilder 30` (the last 30 minutes, with the deploy key, as the watch reads them), or `ssh root@APP_IP docker logs --tail 100 anth-anthwebbuilder-0` (or `-1`, whichever slot is current).
+- **Update anth-deploy:** after pulling a new Anth-Agent, `just server update root@APP_IP` installs the latest `anth-deploy` on the app server. The watch tells you when it needs this ("no logs command yet").

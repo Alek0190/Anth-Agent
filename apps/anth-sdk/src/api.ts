@@ -113,7 +113,7 @@ export interface ProjectWatchSummary {
 
 // ---------------------------------------------------------------- watch and fix
 
-export type WatchSource = "vercel-log" | "vercel-request" | "uptime" | "webhook";
+export type WatchSource = "vercel-log" | "vercel-request" | "server-log" | "uptime" | "webhook";
 export type WatchVerdict = "normal" | "suspicious" | "incident";
 
 /** GET /v1/projects/:client/:project/watch. One device watches a project's production. */
@@ -130,6 +130,11 @@ export interface WatchInfo {
   paths: string[];
   /** Read production runtime errors and 5xx requests with `vercel logs`. */
   vercel: boolean;
+  /**
+   * Read the app's error and warning lines on its app server (`anth-deploy logs` over the deploy key), for projects
+   * whose anth.json says deploy.target "server". Emails, IPs, query strings and tokens are removed before storing.
+   */
+  serverLogs: boolean;
   /** Secret path for POST events from other services: `<device url>/hooks/<client>/<project>/<secret>`. */
   webhookPath: string;
   lastTickAt?: number;
@@ -142,7 +147,10 @@ export interface UpsertWatchBody {
   path?: string;
   url?: string;
   paths?: string[];
+  /** Default for a new watch: on unless anth.json ships to an app server. */
   vercel?: boolean;
+  /** Default for a new watch: on when anth.json ships to an app server. */
+  serverLogs?: boolean;
   enabled?: boolean;
 }
 

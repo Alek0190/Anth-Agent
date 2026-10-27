@@ -2,7 +2,7 @@
 # anth-deploy: the only thing Anth-Agent's ship job can run on an app server.
 #
 # Installed as /usr/local/bin/anth-deploy by deploy/server-setup.sh, and bound to the deploy SSH key as a forced
-# command, so a leaked key can do nothing but these four things:
+# command, so a leaked key can do nothing but these things:
 #
 #   preview  <app> <sha>   read a tar of the source on stdin, docker build it, run it on the preview slot, health check,
 #                          print the preview URL
@@ -11,6 +11,9 @@
 #   rollback <app>         promote the previous production image again
 #   status   <app>         print the current and previous production images
 #   refresh  <app>         rewrite the app's Caddyfile for the live slot (after its password changed)
+#   logs     <app> <since> print production's log lines since a Unix time, timestamped, newest ANTH_LOG_LINES (2000)
+#                          at most, each cut to 4000 characters. Read only, and it never waits for a deploy: Anth-Agent's
+#                          watch reads it every minute
 #
 # A password (BASIC_AUTH_USER and BASIC_AUTH_HASH in app.env, set by `just server lock`) protects production and
 # preview, or only the preview (BASIC_AUTH_SCOPE=preview: the public product with a private preview). /anth-health stays
@@ -51,9 +54,10 @@ fi
 cmd="${1:-}"
 app="${2:-}"
 sha="${3:-}"
-[[ "$cmd" =~ ^(preview|promote|rollback|status|refresh)$ ]] || die "usage: preview <app> <sha> | promote <app> <sha> | rollback <app> | status <app> | refresh <app>"
+[[ "$cmd" =~ ^(preview|promote|rollback|status|refresh|logs)$ ]] || die "usage: preview <app> <sha> | promote <app> <sha> | rollback <app> | status <app> | refresh <app> | logs <app> <since>"
 [[ "$app" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die "invalid app name: $app"
 if [[ "$cmd" =~ ^(preview|promote)$ ]]; then [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]] || die "invalid commit: $sha"; fi
+if [ "$cmd" = logs ]; then [[ "$sha" =~ ^[0-9]{1,11}$ ]] || die "invalid time: $sha (Unix seconds)"; fi
 
 dir="$ROOT/$app"
 [ -f "$dir/app.env" ] || die "$app is not set up on this server (run deploy/server-setup.sh)"
@@ -65,6 +69,18 @@ HEALTH_PATH="${HEALTH_PATH:-/}"
 DATA_DIR="${DATA_DIR:-/app/data}"
 # The Docker image tag for a commit of this app.
 image() { echo "anth-$app:$1"; }
+
+# Production's log lines since a Unix time, before the deploy lock: reading changes nothing, so it never waits for a
+# deploy (or makes one wait). Docker's own timestamps lead each line, so the watch can order and de-duplicate them.
+if [ "$cmd" = logs ]; then
+  [ -f "$dir/current" ] || die "$app has no production deployment yet"
+  slot="$(cut -d' ' -f1 "$dir/current")"
+  [[ "$slot" =~ ^[01]$ ]] || die "the production slot of $app is unreadable"
+  lines="${ANTH_LOG_LINES:-2000}"
+  [[ "$lines" =~ ^[0-9]{1,5}$ ]] || lines=2000
+  docker logs --timestamps --since "$sha" "anth-$app-$slot" 2>&1 | tail -n "$lines" | cut -c1-4000
+  exit 0
+fi
 
 # One deploy at a time per app.
 exec 9>"$dir/.lock"

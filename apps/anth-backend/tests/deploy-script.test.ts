@@ -32,6 +32,7 @@ case "$1" in
   inspect) [ -f "${root}/preview-image" ] && cat "${root}/preview-image" ;;
   run) if [ "$2" = -d ] && [ "$4" = anth-site-preview ]; then echo "\${@: -1}" > "${root}/preview-image"; fi ;;
   rm) if [[ "$*" == *anth-site-preview* ]]; then rm -f "${root}/preview-image"; fi ;;
+  logs) for i in 1 2 3; do echo "2026-10-27T14:00:0$i.000000000Z line $i of \${@: -1}"; done; echo "2026-10-27T14:00:04.000000000Z $(printf 'x%.0s' {1..5000})"; echo "stderr line" >&2 ;;
 esac
 `,
   );
@@ -135,6 +136,37 @@ test("anth-deploy: preview, zero-downtime promote between slots, rollback, refus
     assert.match(s.run(["preview", "site", "not-a-sha"]).err, /invalid commit/);
     assert.match(s.run(["shell", "site"]).err, /usage/);
     assert.match(s.run(["status", "nope"]).err, /not set up on this server/);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("anth-deploy logs: production's lines since a time, bounded, read only, never waiting for a deploy", () => {
+  const s = server();
+  try {
+    assert.match(s.run(["logs", "site", "1700000000"]).err, /no production deployment yet/);
+    assert.equal(s.run(["preview", "site", "abc1234"], { input: s.tarball() }).code, 0);
+    assert.equal(s.run(["promote", "site", "abc1234"]).code, 0);
+    // A deploy holds the lock for minutes; reading logs must not wait for it.
+    const held = spawnSync("bash", ["-c", `exec 9>"${join(s.app, ".lock")}"; flock 9; ANTH_DEPLOY_ROOT=${join(s.root, "srv")} PATH=${join(s.root, "bin")}:$PATH timeout 10 bash ${SCRIPT} logs site 1700000000`]);
+    assert.equal(held.status, 0, held.stderr.toString());
+    const out = held.stdout.toString().trim().split("\n");
+    assert.deepEqual(out.slice(0, 3), [
+      "2026-10-27T14:00:01.000000000Z line 1 of anth-site-0",
+      "2026-10-27T14:00:02.000000000Z line 2 of anth-site-0",
+      "2026-10-27T14:00:03.000000000Z line 3 of anth-site-0",
+    ]);
+    assert.equal(out[3].length, 4000, "each line is cut to 4000 characters");
+    assert.ok(out.includes("stderr line"), "the app's stderr is read too");
+    assert.match(s.calls(), /docker logs --timestamps --since 1700000000 anth-site-0/);
+    // The newest ANTH_LOG_LINES at most.
+    assert.equal(s.run(["logs", "site", "1700000000"], { env: { ANTH_LOG_LINES: "2" } }).out.split("\n").length, 2);
+    // Over the forced command, and nothing but a number as the time.
+    assert.equal(s.run([], { forced: "logs site 1700000000" }).code, 0);
+    const marker = join(s.root, "pwned");
+    for (const bad of ["logs site 1h", `logs site 1700000000; touch ${marker}`, "logs site", `logs site $(touch ${marker})`])
+      assert.notEqual(s.run([], { forced: bad }).code, 0, bad);
+    assert.equal(existsSync(marker), false);
   } finally {
     s.cleanup();
   }
