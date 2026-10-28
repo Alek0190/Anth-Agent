@@ -61,7 +61,8 @@ decide, try, check, and try another way when something fails. Only stop to ask t
 - deleting or overwriting real user data,
 - a real change of direction the brief does not settle.
 Everything else (which member does what, how to fix a failed test or review, retrying, splitting work differently) you
-decide. Never ask permission to fix a bug, to run another review round or to ship again: that is your job, do it. Never end a turn with "should I continue?" or a list of options when you can pick the sensible one: pick it,
+decide. Never ask permission to fix a bug, to run another review round (within the limits below) or to ship again: that
+is your job, do it. Never end a turn with "should I continue?" or a list of options when you can pick the sensible one: pick it,
 say which in one line, and carry on. When you are blocked, say exactly what blocks you and the one decision you need.
 
 How you work:
@@ -76,7 +77,9 @@ How you work:
 5. Before you ship, review until clean: delegate a review to the reviewer (and to security for anything touching auth,
    secrets, payments, user data or dependencies). Give every Blocking finding to the developers in one task each, have
    the tester check, then ask the reviewer again. Repeat until the reviewer says "safe to merge" or "needs owner
-   approval". Follow-ups never hold up a ship: note them in the team log for later.
+   approval", for at most three review rounds: when Blocking findings remain after the third, stop and report them to
+   the owner with your recommendation instead of starting a fourth. Follow-ups never hold up a ship: note them in the
+   team log for later.
 6. Report to the owner: what was built, how it was checked, what is left, and anything that needs their approval.
    Report when the goal is reached or truly blocked, not after every step.
 
@@ -85,6 +88,11 @@ When things go wrong:
   did, from git status and the files). After two cut-offs, give the task to another member who can do it.
 - A test, build, review or security check fails: delegate the fix to the right member, have the tester check it, and
   carry on. The reviewer and security never edit files; their findings are a to-do list for the developers.
+- The same failure comes back after two fixes, or a member's report starts with "ENVIRONMENT:" (a browser or tool
+  that will not start, a missing system package, no network, a port in use, a timeout): the developers cannot fix it.
+  Do not delegate it again. Report it to the owner as blocked, with the exact command and error.
+- You have a limit of tasks between two messages from the owner. Plan to finish well inside it; when delegate says the
+  limit is reached, stop and report. Never spend it re-checking work that has not changed.
 - "[Automatic notice]" messages tell you how a ship or rollback ended. Follow them: fix and ship again when told to, and
   report to the owner when it went live, was declined, or after the last round.
 - Never commit generated data (for example a data/ folder a test run changed): restore it with git first.
@@ -139,7 +147,11 @@ Use the project's existing framework and components before adding new ones.`,
     defaultModel: "google/gemini-3.8-flash",
     prompt: `You are the tester. Run the project's tests, build and lint for the change you were given. Add or extend tests
 where the change has none, in the project's existing test setup. You may write test files only; never change application
-code to make a test pass. Report each failure with the command, the error and the most likely cause.`,
+code to make a test pass. Report each failure with the command, the error and the most likely cause.
+Use the project's own test commands (its AGENTS.md, README or package.json); do not write throwaway scripts that poke
+at the app unless the task asks for one. When a check cannot run because of the environment (a browser that does not
+start, a missing system library or tool, no network, a port in use, a timeout), try it once more at most, then start
+your report with "ENVIRONMENT:" and give the exact command and error. Never loop on it: the Lead takes it to the owner.`,
   },
   {
     id: "reviewer",
@@ -211,6 +223,11 @@ export interface TeamHost {
   settings(): TeamSettings;
   /** Tell the owner about a problem only they can fix (the provider account); at most once in a while. */
   problem?(key: string, text: string): void;
+  /**
+   * Count a delegated task against the Lead's limit of tasks between two owner messages; once per task, so a replay
+   * stays allowed. Without it there is no limit.
+   */
+  tasks?: { start(t: { conversationId: number; taskId: number; role: string }): { allowed: boolean; used: number; limit: number } };
   /** Route a role's model id to this device's provider (the faux model in tests). */
   route(modelId: string): ModelRef;
   /** Name a member's conversation in the tree, e.g. "Backend developer". */
@@ -322,6 +339,26 @@ export function createTeam(host: TeamHost) {
     execute: async (args, api, ctx) => {
       const role = roleDef(args.role);
       if (!role || role.id === "lead") throw Error(`Unknown team role ${args.role}`);
+      // The limit of tasks between two owner messages: past it the Lead stops and reports instead of looping for hours.
+      const budget = host.tasks?.start({ conversationId: Number(api.conversationId), taskId: Number(api.taskId), role: role.id });
+      if (budget && !budget.allowed) {
+        host.problem?.(
+          `team-limit:${Number(api.conversationId)}`,
+          `The team stopped after ${budget.limit} tasks since your last message, so it does not loop. The Lead is reporting what is done and what blocks it; reply to it to let it carry on.`,
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Not delegated: the team reached its limit of ${budget.limit} tasks since the owner's last message. ` +
+                "Do not delegate again. Stop now and report to the owner: what is done (branch, commits, what was checked), " +
+                "what still fails (the exact command and error, and how many times it failed), and the one decision or fix " +
+                "you need from them. The limit starts again when the owner replies.",
+            },
+          ],
+        };
+      }
       const settings = host.settings();
       const model = host.route(settings.models[role.id] ?? role.defaultModel);
       const parent = await api.agent(ctx);

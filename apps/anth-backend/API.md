@@ -154,3 +154,10 @@ reserves credit for the model's whole output budget (128k for some models), and 
 402 before it starts. When a team member is refused for an account reason (no credits, a bad or limited key), the Lead is
 told it is an account problem, not to retry, and to report; the owner gets a "Needs you" message on Telegram (at most
 every six hours per problem).
+
+A Lead may delegate at most `ANTH_TEAM_MAX_TASKS` tasks (default 40) between two messages from the owner; a message
+sent through `POST …/agents/:a/messages` starts the count again, automatic notices do not. Past the limit `delegate`
+refuses with an instruction to stop and report what is done, what still fails and the decision needed, and the owner
+gets a "Needs you" message. The count is durable (`team_tasks` in the catalog) and a replayed delegate call is never
+counted twice. The Lead's prompt also caps review rounds at three and sends failures a developer cannot fix (the same
+failure after two fixes, or a member's report starting with `ENVIRONMENT:`) to the owner instead of back to the team.
