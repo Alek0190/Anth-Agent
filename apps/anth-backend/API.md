@@ -156,7 +156,8 @@ told it is an account problem, not to retry, and to report; the owner gets a "Ne
 every six hours per problem).
 
 A Lead may delegate at most `ANTH_TEAM_MAX_TASKS` tasks (default 40) between two messages from the owner; a message
-sent through `POST …/agents/:a/messages` starts the count again, automatic notices do not. Past the limit `delegate`
+sent through `POST …/agents/:a/messages` starts the count again, once per submission (a retry with the same `requestId`
+returns the same submission and does not), and automatic notices do not. Past the limit `delegate`
 refuses with an instruction to stop and report what is done, what still fails and the decision needed, and the owner
 gets a "Needs you" message. The count is durable (`team_tasks` in the catalog) and a replayed delegate call is never
 counted twice. The Lead's prompt also caps review rounds at three and sends failures a developer cannot fix (the same

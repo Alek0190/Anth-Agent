@@ -247,7 +247,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,name TEXT NOT NULL,cwd TEXT NOT NULL,dbPath TEXT NOT NULL UNIQUE,createdAt INTEGER NOT NULL,model TEXT NOT NULL,provider TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS team_notes(sessionId TEXT NOT NULL,key TEXT NOT NULL,at INTEGER NOT NULL,author TEXT NOT NULL,toRole TEXT NOT NULL,text TEXT NOT NULL,PRIMARY KEY(sessionId,key));
       CREATE TABLE IF NOT EXISTS team_tasks(sessionId TEXT NOT NULL,taskId INTEGER NOT NULL,conversationId INTEGER NOT NULL,role TEXT NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(sessionId,taskId));
-      CREATE TABLE IF NOT EXISTS owner_inputs(sessionId TEXT NOT NULL,conversationId INTEGER NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(sessionId,conversationId));
+      CREATE TABLE IF NOT EXISTS owner_inputs(sessionId TEXT NOT NULL,conversationId INTEGER NOT NULL,submissionId INTEGER NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(sessionId,conversationId,submissionId));
       CREATE TABLE IF NOT EXISTS conversation_names(sessionId TEXT NOT NULL,conversationId INTEGER NOT NULL,name TEXT NOT NULL,PRIMARY KEY(sessionId,conversationId));
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(key TEXT PRIMARY KEY,route TEXT NOT NULL,status INTEGER NOT NULL,body TEXT NOT NULL,createdAt INTEGER NOT NULL);
@@ -1159,7 +1159,7 @@ export class Store {
     }
     const submission = await c.submit({ type: "input", content, requestId: body.requestId, whenBusy }, ctx);
     // A message from the owner (the API, not an automatic notice) starts the agent's team-task count again.
-    if (row) this.noteOwnerInput(row.id, c.id as number);
+    if (row) this.noteOwnerInput(row.id, c.id as number, submission.id as number);
     return submission;
   }
 
@@ -1608,8 +1608,8 @@ export class Store {
   startTeamTask(sessionId: string, t: { conversationId: number; taskId: number; role: string }) {
     const limit = teamTaskLimit();
     const since = (
-      this.catalog.prepare("SELECT at FROM owner_inputs WHERE sessionId=? AND conversationId=?").get(sessionId, t.conversationId) as
-        | { at: number }
+      this.catalog.prepare("SELECT MAX(at) AS at FROM owner_inputs WHERE sessionId=? AND conversationId=?").get(sessionId, t.conversationId) as
+        | { at: number | null }
         | undefined
     )?.at ?? 0;
     const used = () =>
@@ -1628,11 +1628,14 @@ export class Store {
     return { allowed: true, used: n + 1, limit };
   }
 
-  /** The owner wrote to this agent: its team-task count starts again. */
-  noteOwnerInput(sessionId: string, conversationId: number) {
+  /**
+   * The owner wrote to this agent: its team-task count starts again, once per submission. A client retry with the same
+   * requestId gets the existing submission back, so it records nothing and cannot buy the Lead another full budget.
+   */
+  noteOwnerInput(sessionId: string, conversationId: number, submissionId: number) {
     this.catalog
-      .prepare("INSERT INTO owner_inputs(sessionId,conversationId,at) VALUES(?,?,?) ON CONFLICT(sessionId,conversationId) DO UPDATE SET at=excluded.at")
-      .run(sessionId, conversationId, Date.now());
+      .prepare("INSERT OR IGNORE INTO owner_inputs(sessionId,conversationId,submissionId,at) VALUES(?,?,?,?)")
+      .run(sessionId, conversationId, submissionId, Date.now());
   }
 
   /** The newest notes of a session's team log, oldest first; with `for`, only notes for everyone or for that role. */

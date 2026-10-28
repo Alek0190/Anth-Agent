@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { AnthClient } from "../../anth-sdk/src/client.js";
 import { accountProblem } from "../src/team.js";
 import { maxOutputTokens, teamTaskLimit } from "../src/store.js";
@@ -42,12 +43,31 @@ test("a Lead stops at its task limit and reports; the owner's next message lets 
     // The owner hears about it (the phone alert path).
     assert.match(server.output(), /problem: The team stopped after 2 tasks since your last message/);
 
+    // A client retry of the same message (same requestId) gets the same submission back: it is not a new owner
+    // message, so it must not start the count again.
+    const ownerInputs = () => {
+      const dataDir = server.output().match(/data: (\S+)/)?.[1];
+      assert.ok(dataDir, "the server prints its data folder");
+      const db = new DatabaseSync(join(dataDir, "catalog.sqlite"), { readOnly: true });
+      try {
+        return db.prepare("SELECT submissionId, at FROM owner_inputs WHERE sessionId=? ORDER BY at").all(s.id) as { submissionId: number; at: number }[];
+      } finally {
+        db.close();
+      }
+    };
+    const before = ownerInputs();
+    assert.equal(before.length, 1);
+    const retry = await lead.send("delegate: tester | !echo one ;; tester | !echo two ;; tester | !echo three", "followUp", "loop-1", 30000);
+    assert.equal(retry.status, "done");
+    assert.deepEqual(ownerInputs(), before, "a retried request does not reset the count");
+
     // The owner replies: the count starts again and the next task runs.
     const next = await lead.send("delegate: tester | !echo four", "followUp", "loop-2", 120000);
     assert.equal(next.status, "done");
     await until(async () => (await testers()) === 3, 15000, "the third tester ran after the owner replied");
     const after = JSON.stringify(await lead.transcript("markdown"));
     assert.equal(refusals(after), refusals(transcript), "no new refusal");
+    assert.equal(ownerInputs().length, 2, "the new message is a new start");
   } finally {
     await server.stop();
     await t.cleanup();
