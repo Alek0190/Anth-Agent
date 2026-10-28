@@ -10,6 +10,7 @@
 //   "submitfix: <test command>" → one submit_fix call (incident agents)
 //   "delegate: <role> | <task>[ ;; <role> | <task>…]" → one delegate call per pair, all in the same turn
 //   "note: <text>" → one team_note call (team members and the Lead)
+//   "reviews:[ <pull request>]" → one pull_request_reviews call (the Lead)
 //   "maxtokens?" → "maxTokens=<the request's output cap>"; "nocredits" → a 402 error like OpenRouter without credits
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
@@ -79,6 +80,10 @@ export function installFaux(models: MutableModels) {
       return call("check_durable_job", /^\d+$/.test(ref) ? { task_id: Number(ref) } : ref ? { job: ref } : {});
     }
     if (prompt.startsWith("search:")) return call("search_history", { query: prompt.slice(7).trim() });
+    if (prompt.startsWith("reviews:")) {
+      const pr = prompt.slice(8).trim();
+      return call("pull_request_reviews", pr ? { pr } : {});
+    }
     if (prompt.startsWith("submitfix:"))
       return call("submit_fix", { test_command: prompt.slice(10).trim(), summary: "Faux fix" });
     if (prompt.startsWith("delegate:")) {

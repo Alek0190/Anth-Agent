@@ -11,7 +11,10 @@
 // Rollback is its own job: target → approve → roll back → verify. On an app server the target release is fixed before
 // the approval, so a replay after a crash promotes that same release again (a no-op) instead of flipping back.
 import type { JobDef } from "../../anth-sdk/src/jobs.js";
+import { github, githubAuth, githubGitAuth, githubRepo } from "./github.js";
 import type { Handler, Outcome, Phase } from "./jobs.js";
+
+export { githubRepo };
 
 const RESULT = "/jobs/ship";
 
@@ -22,7 +25,7 @@ export const SHIP_DEFS: JobDef[] = [
     summary:
       "Commit the work to a branch, build and test it, let the reviewer and security check it, deploy a Vercel preview, check it and open a pull request. Then wait for your approval and promote that exact preview to production.",
     phases: [
-      { id: "prepare", label: "Prepare", summary: "Commit the work to a ship branch" },
+      { id: "prepare", label: "Prepare", summary: "Commit the work to a ship branch with the newest base" },
       { id: "build", label: "Build and test", summary: "Install, lint, build and test" },
       { id: "review", label: "Review", summary: "The reviewer and security check the diff" },
       { id: "preview", label: "Preview", summary: "Deploy a Vercel preview" },
@@ -118,10 +121,39 @@ async function defaultBranch(p: Phase, dir: string) {
   return "main";
 }
 
-/** owner/repo from a GitHub remote URL (https or ssh), or undefined for anything else. */
-export function githubRepo(remote: string) {
-  const m = remote.trim().match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
-  return m ? `${m[1]}/${m[2]}` : undefined;
+/**
+ * The newest commit of the base branch: fetch it from origin (private GitHub repositories with GITHUB_TOKEN, which git
+ * sends to github.com only) and use origin/<base>. The local branch only when there is no origin or it cannot be reached.
+ */
+async function freshBase(p: Phase, dir: string, base: string) {
+  const remote = (await p.shell(inDir(dir, "git remote get-url origin 2>/dev/null || true"))).out.trim();
+  if (!remote) return base;
+  const secrets = githubAuth();
+  const out = await p.effect(`git ${githubGitAuth(secrets)}fetch --quiet origin ${q(base)} 2>&1 || echo ANTH_FETCH_FAILED`, {
+    label: `git fetch origin ${base}`,
+    dir,
+    secrets,
+    timeoutSec: 120,
+  });
+  if (out.includes("ANTH_FETCH_FAILED")) {
+    await p.note(`Could not fetch ${base} from origin: comparing with the local ${base}`, out.replace("ANTH_FETCH_FAILED", "").trim().slice(-300));
+    return base;
+  }
+  const remoteBase = `origin/${base}`;
+  return (await p.shell(inDir(dir, `git rev-parse --verify --quiet ${q(remoteBase)}`))).code === 0 ? remoteBase : base;
+}
+
+/**
+ * Commit and merge as the configured git author. Never invent one: Vercel's Hobby plan only builds commits whose author
+ * email belongs to the Vercel account, so a made-up author gets every deploy blocked.
+ */
+async function requireAuthor(p: Phase, dir: string) {
+  const email = (await p.shell(inDir(dir, "git config user.email"))).out.trim();
+  if (!email)
+    throw Error(
+      'No git author is set on this device. Run git config --global user.name "Your Name" and git config --global user.email "you@example.com" ' +
+        "with the email of your Vercel account (Vercel Hobby only builds commits by the account owner), then ship again.",
+    );
 }
 
 /** The first http(s) URL on the last line that has one: how the Vercel CLI prints a deployment. */
@@ -266,30 +298,10 @@ async function httpCheck(p: Phase, url: string, tries = 10) {
 /** Join a base URL and a path with exactly one slash. */
 const joinUrl = (base: string, path: string) => `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 
-/** Call the GitHub REST API with the device's token. */
-async function github(path: string, init: { method?: string; body?: unknown } = {}) {
-  const token = env("GITHUB_TOKEN");
-  if (!token) throw Error("GITHUB_TOKEN is not set on this device. Add it to .env and env_keys in anth-network.yaml.");
-  const res = await fetch(`${env("ANTH_GITHUB_API") ?? "https://api.github.com"}${path}`, {
-    method: init.method ?? "GET",
-    headers: {
-      authorization: `Bearer ${token}`,
-      accept: "application/vnd.github+json",
-      "x-github-api-version": "2022-11-28",
-      ...(init.body ? { "content-type": "application/json" } : {}),
-    },
-    body: init.body ? JSON.stringify(init.body) : undefined,
-    signal: AbortSignal.timeout(20_000),
-  });
-  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) throw Error(`GitHub ${init.method ?? "GET"} ${path}: ${res.status} ${String(data.message ?? "")}`);
-  return data;
-}
-
 // ------------------------------------------------------------------ the ship job
 
 const ship: Record<string, Handler> = {
-  /** Check the folder is a clean git repo and make the release branch. */
+  /** Commit the work to a ship branch and bring in the newest base branch, so the preview is "base + this work". */
   prepare: async (p) => {
     const dir = String(p.input.path);
     await p.exec(inDir(dir, "git rev-parse --is-inside-work-tree"), "git rev-parse --is-inside-work-tree");
@@ -297,27 +309,44 @@ const ship: Record<string, Handler> = {
     const base = auto(p.input.base) ? (current.startsWith("anth/ship-") ? await defaultBranch(p, dir) : current) : String(p.input.base);
     const branch = `anth/ship-${p.run.n}-${p.run.id}`;
     const title = auto(p.input.title) ? `Anth-Agent ship #${p.run.n}` : String(p.input.title);
+    // Never commit conflict markers. On this run's own branch they are its merge below, cut off by a crash: undo it.
+    const unmerged = (await p.shell(inDir(dir, "git diff --name-only --diff-filter=U"))).out.trim().split("\n").filter(Boolean);
+    if (unmerged.length && current === branch) await p.exec(inDir(dir, "git merge --abort"), "git merge --abort");
+    else if (unmerged.length) throw Error(`Unresolved merge conflicts in ${unmerged.slice(0, 10).join(", ")}. Resolve them and commit, then ship again.`);
     if (current !== branch) await p.exec(inDir(dir, `git checkout -B ${q(branch)}`), `git checkout -B ${branch}`);
     await p.exec(inDir(dir, "git add -A"), "git add -A");
     const staged = await p.shell(inDir(dir, "git diff --cached --quiet"));
     if (staged.code !== 0) {
-      // Commit as the configured git author. Never invent one: Vercel's Hobby plan only builds commits whose author
-      // email belongs to the Vercel account, so a made-up author gets every deploy blocked.
-      const email = (await p.shell(inDir(dir, "git config user.email"))).out.trim();
-      if (!email)
-        throw Error(
-          'No git author is set on this device. Run git config --global user.name "Your Name" and git config --global user.email "you@example.com" ' +
-            "with the email of your Vercel account (Vercel Hobby only builds commits by the account owner), then ship again.",
-        );
+      await requireAuthor(p, dir);
       await p.exec(inDir(dir, `git commit -q -m ${q(title)}`), `git commit -m "${title}"`);
     } else await p.note("Nothing new to commit");
-    const exists = await p.shell(inDir(dir, `git rev-parse --verify --quiet ${q(base)}`));
+    const compare = await freshBase(p, dir, base);
+    const exists = await p.shell(inDir(dir, `git rev-parse --verify --quiet ${q(compare)}`));
     if (exists.code !== 0) throw Error(`Base branch ${base} does not exist. Set the base input.`);
-    const ahead = Number((await p.exec(inDir(dir, `git rev-list --count ${q(base)}..HEAD`), `git rev-list --count ${base}..HEAD`)).trim());
+    // The team keeps working on the last ship branch, and a pull request merged on GitHub never reaches the local
+    // folder by itself: without this, the preview and the review would run on an old copy of the base (missing every
+    // fix merged since). Merging is safe to repeat: after a crash it finds nothing new to bring in.
+    const behind = Number((await p.shell(inDir(dir, `git rev-list --count HEAD..${q(compare)}`))).out.trim()) || 0;
+    if (behind) {
+      await requireAuthor(p, dir);
+      await p.step("command", `git merge ${compare}`, async () => {
+        const merged = await p.shell(inDir(dir, `git merge --no-edit -m ${q(`Merge ${compare} into ${branch}`)} ${q(compare)}`), 120);
+        if (merged.code === 0) return { value: undefined, detail: `Brought in ${behind} new commit${behind === 1 ? "" : "s"} from ${compare}` };
+        const conflicts = (await p.shell(inDir(dir, "git diff --name-only --diff-filter=U"))).out.trim().split("\n").filter(Boolean);
+        await p.shell(inDir(dir, "git merge --abort"));
+        throw Error(
+          conflicts.length
+            ? `The work conflicts with the newest ${base} in ${conflicts.slice(0, 10).join(", ")}. A developer has to merge ${compare} into ${branch}, resolve the conflicts and run the tests; then ship again.`
+            : `git merge ${compare} failed: ${merged.out.trim().split("\n").slice(-4).join(" ")}`,
+        );
+      });
+    }
+    const ahead = Number((await p.exec(inDir(dir, `git rev-list --count ${q(compare)}..HEAD`), `git rev-list --count ${compare}..HEAD`)).trim());
     const head = (await p.shell(inDir(dir, "git rev-parse --short HEAD"))).out.trim();
+    const brought = behind ? ` (includes ${behind} new commit${behind === 1 ? "" : "s"} from ${compare})` : "";
     return {
-      done: ahead ? `${branch}: ${ahead} commit${ahead === 1 ? "" : "s"} ahead of ${base}` : `No new commits; shipping ${base} as it is`,
-      data: { base, branch, title, ahead, head },
+      done: ahead ? `${branch}: ${ahead} commit${ahead === 1 ? "" : "s"} ahead of ${compare}${brought}` : `No new commits; shipping ${base} as it is`,
+      data: { base, compare, branch, title, ahead, head },
     };
   },
 
@@ -357,7 +386,8 @@ const ship: Record<string, Handler> = {
       return { done: "Nothing to review" };
     }
     const dir = String(p.input.path);
-    const base = String(p.data.base);
+    // The fetched base (origin/main) when prepare had one: a stale local main would show main's newer commits as changes.
+    const base = String(p.data.compare ?? p.data.base);
     const where = dir === "." ? "" : ` in the folder ${dir}`;
     const stat = await p.exec(inDir(dir, `git diff --stat ${q(base)}...HEAD | tail -1`), `git diff --stat ${base}...HEAD`);
     const ask = (what: string) =>
