@@ -171,11 +171,24 @@ test("ship: branch, build, review, preview, PR, durable approval across a crash,
     const state = (await client.deviceDoc<Record<string, Record<string, unknown>>>("app.shared-state")).value;
     assert.equal(state.jobs?.ship && (state.jobs.ship as Record<string, unknown>).verified, true);
 
-    // A second ship that you decline never reaches production.
+    // Meanwhile a fix lands on main on GitHub (merged there, never pulled into this folder).
+    const other = join(t.root, "other");
+    execFileSync("git", ["clone", "-q", "-b", "main", remote, other]);
+    writeFileSync(join(other, "NEWS.md"), "host fix\n");
+    git(other, "add", "-A");
+    git(other, "-c", "user.name=B", "-c", "user.email=b@example.com", "commit", "-qm", "Host fix on main");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    const fix = git(other, "rev-parse", "HEAD");
+
+    // A second ship that you decline never reaches production. The team is still on the first ship's branch, yet the
+    // new branch carries main's fix: the preview is the newest main plus the work, not an old copy.
     writeFileSync(join(repo, "index.html"), "<h1>v3</h1>");
     const second = await lead.demo<{ taskId: number }>("jobs", { job: "ship", input: { path: "site", github_repo: "alek/site" } });
     await until(async () => (await runOf(second.taskId)).status === "waiting", 90000, "second ship to wait");
-    assert.equal((await runOf(second.taskId)).phases[0].summary?.includes("ahead of main"), true, "base auto is main from a ship branch");
+    assert.match((await runOf(second.taskId)).phases[0].summary ?? "", /ahead of origin\/main \(includes 1 new commit from origin\/main\)/, "base auto is main from a ship branch");
+    execFileSync("git", ["merge-base", "--is-ancestor", fix, "HEAD"], { cwd: repo });
+    assert.equal(readFileSync(join(repo, "NEWS.md"), "utf8"), "host fix\n");
+    assert.match(pulls[1].body, new RegExp(`${origin}/preview-2`));
     await lead.demo(`jobs/${second.taskId}/approval`, { approved: false });
     await until(async () => (await runOf(second.taskId)).status === "declined", 20000, "second ship declined");
     assert.equal(calls().filter((c) => c.startsWith("promote")).length, 1);
@@ -187,6 +200,21 @@ test("ship: branch, build, review, preview, PR, durable approval across a crash,
     await lead.demo(`jobs/${rb.taskId}/approval`, { approved: true });
     await until(async () => (await runOf(rb.taskId)).status === "completed", 30000, "rollback to complete");
     assert.equal(calls().filter((c) => c.startsWith("rollback")).length, 1);
+
+    // Work that conflicts with the newest main stops the ship before anything is built or deployed, and leaves no
+    // half-done merge behind.
+    writeFileSync(join(other, "index.html"), "<h1>changed on main</h1>");
+    git(other, "-c", "user.name=B", "-c", "user.email=b@example.com", "commit", "-qam", "Change the page on main");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    writeFileSync(join(repo, "index.html"), "<h1>v4</h1>");
+    const clash = await lead.demo<{ taskId: number }>("jobs", { job: "ship", input: { path: "site", github_repo: "alek/site" } });
+    await until(async () => (await runOf(clash.taskId)).status === "failed", 60000, "conflicting ship to stop");
+    const failed = await runOf(clash.taskId);
+    assert.equal(failed.phase, "prepare");
+    assert.match(failed.error ?? "", /conflicts with the newest main in index\.html/);
+    assert.equal(existsSync(join(repo, ".git", "MERGE_HEAD")), false);
+    assert.equal(git(repo, "diff", "--name-only", "--diff-filter=U"), "");
+    assert.equal(calls().filter((c) => c.startsWith("deploy")).length, 2);
   } finally {
     await server.stop();
     site.close();
